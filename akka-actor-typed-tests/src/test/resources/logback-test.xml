@@ -27,5 +27,7 @@
 
     <root level="DEBUG">
         <appender-ref ref="CapturingAppender"/>
+        <!-- remove again, just for inspecting logs in ReliableDeliverySpec -->
+        <appender-ref ref="STDOUT"/>
     </root>
 </configuration>
