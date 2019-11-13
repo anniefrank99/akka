@@ -18,10 +18,11 @@ import akka.actor.typed.scaladsl.LoggerOps
 // FIXME Scaladoc describes how it works, internally. Rewrite for end user and keep internals as impl notes.
 
 /**
- * The `ProducerController` sends `RequestNext` to the actual producer, which is then allowed to send
- * one message to the `ProducerController`. The `RequestMessage` message is defined via a factory
- * function so that the producer can decide what type to use. The producer and `ProducerController`
- * are supposed to be local so that these messages are fast and not lost.
+ * The producer will start the flow by sending a [[ProducerController.Start]] message to the `ProducerController` with
+ * message adapter reference to convert [[ProducerController.RequestNext]] message.
+ * The sends `RequestNext` to the producer, which is then allowed to send one message to the `ProducerController`.
+ *
+ * The producer and `ProducerController` are supposed to be local so that these messages are fast and not lost.
  *
  * The `ProducerController` sends the first message to the `ConsumerController` without waiting for
  * a `Request` from the `ConsumerController`. The main reason for this is that when used with
@@ -58,14 +59,25 @@ object ProducerController {
 
   sealed trait Command[A] extends InternalCommand
 
+  final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
+
+  final case class RequestNext[A](
+      producerId: String,
+      currentSeqNr: Long,
+      confirmedSeqNr: Long,
+      sendNextTo: ActorRef[A],
+      askNextTo: ActorRef[MessageWithConfirmation[A]])
+
   final case class RegisterConsumer[A](
       consumerController: ActorRef[ConsumerController.Command[A]],
       replyTo: ActorRef[Done])
       extends Command[A]
 
-  final case class RequestNextParam[A](currentSeqNr: Long, confirmedSeqNr: Long, sendNextTo: ActorRef[A])
-
-  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long])
+  /**
+   * For sending confirmation message back to the producer when the message has been fully delivered, processed,
+   * and confirmed by the consumer. Typically used with `ask` from the producer.
+   */
+  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
 
   object Internal {
     final case class Request(confirmedSeqNr: Long, upToSeqNr: Long, supportResend: Boolean, viaReceiveTimeout: Boolean)
@@ -88,95 +100,78 @@ object ProducerController {
       firstSeqNr: Long,
       send: ConsumerController.SequencedMessage[A] => Unit)
 
-  def apply[A: ClassTag, RequestNext](
-      producerId: String,
-      requestNextFactory: RequestNextParam[A] ⇒ RequestNext,
-      producer: ActorRef[RequestNext]): Behavior[Command[A]] = {
-
-    Behaviors
-      .receiveMessagePartial[InternalCommand] {
-        case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
-          replyTo ! Done
-          becomeActive(producerId, requestNextFactory, producer, consumerController)
-      }
-      .narrow
+  def apply[A: ClassTag](producerId: String): Behavior[Command[A]] = {
+    waitingForStart[A](None, None) { (producer, consumerController) =>
+      val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
+      becomeActive(producerId, producer, send)
+    }.narrow
   }
 
   /**
    * For custom `send` function. For example used with Sharding where the message must be wrapped in
    * `ShardingEnvelope(SequencedMessage(msg))`.
    */
-  def apply[A: ClassTag, RequestNext](
+  def apply[A: ClassTag](
       producerId: String,
-      requestNextFactory: RequestNextParam[A] ⇒ RequestNext,
-      producer: ActorRef[RequestNext],
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[Command[A]] = {
-    becomeActive(producerId, requestNextFactory, producer, send).narrow
+    Behaviors.setup { context =>
+      // ConsumerController not used here
+      waitingForStart[A](None, consumerController = Some(context.system.deadLetters)) { (producer, _) =>
+        becomeActive(producerId, producer, send)
+      }.narrow
+    }
   }
 
-  /**
-   * For confirmation message back to the producer when the message has been fully delivered, processed,
-   * and confirmed by the consumer. Typically used with `ask` from the producer.
-   */
-  def withConfirmation[A: ClassTag, RequestNext](
-      producerId: String,
-      requestNextFactory: RequestNextParam[MessageWithConfirmation[A]] ⇒ RequestNext,
-      producer: ActorRef[RequestNext]): Behavior[Command[A]] = {
-    Behaviors
-      .receiveMessagePartial[InternalCommand] {
-        case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
-          replyTo ! Done
-          becomeActive[A, MessageWithConfirmation[A], RequestNext](
-            producerId,
-            requestNextFactory,
-            producer,
-            consumerController)
-      }
-      .narrow
+  private def waitingForStart[A: ClassTag](
+      producer: Option[ActorRef[RequestNext[A]]],
+      consumerController: Option[ActorRef[ConsumerController.Command[A]]])(
+      thenBecomeActive: (ActorRef[RequestNext[A]], ActorRef[ConsumerController.Command[A]]) => Behavior[InternalCommand])
+      : Behavior[InternalCommand] = {
+    Behaviors.receiveMessagePartial[InternalCommand] {
+      case RegisterConsumer(c: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
+        replyTo ! Done
+        producer match {
+          case Some(p) => thenBecomeActive(p, c)
+          case None    => waitingForStart(producer, Some(c))(thenBecomeActive)
+        }
+      case start: Start[A] @unchecked =>
+        consumerController match {
+          case Some(c) => thenBecomeActive(start.producer, c)
+          case None    => waitingForStart(Some(start.producer), consumerController)(thenBecomeActive)
+        }
+    }
   }
 
-  private def becomeActive[A: ClassTag, B: ClassTag, RequestNext](
+  private def becomeActive[A: ClassTag](
       producerId: String,
-      requestNextFactory: RequestNextParam[B] ⇒ RequestNext,
-      producer: ActorRef[RequestNext],
-      consumerController: ActorRef[ConsumerController.Command[A]]): Behavior[InternalCommand] = {
-    val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
-    becomeActive[A, B, RequestNext](producerId, requestNextFactory, producer, send)
-  }
-
-  private def becomeActive[A: ClassTag, B: ClassTag, RequestNext](
-      producerId: String,
-      requestNextFactory: RequestNextParam[B] ⇒ RequestNext,
-      producer: ActorRef[RequestNext],
+      producer: ActorRef[RequestNext[A]],
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[InternalCommand] = {
 
     Behaviors.setup { ctx ⇒
       Behaviors.withTimers { timers =>
-        val msgAdapter: ActorRef[B] = ctx.messageAdapter(msg ⇒ Msg(msg))
-        producer ! requestNextFactory(RequestNextParam(1L, 0L, msgAdapter))
-        new ProducerController[A, B, RequestNext](ctx, producerId, producer, requestNextFactory, msgAdapter, timers)
-          .active(
-            State(
-              requested = true,
-              currentSeqNr = 1L,
-              confirmedSeqNr = 0L,
-              requestedSeqNr = 1L,
-              pendingReplies = Map.empty,
-              unconfirmed = Some(Vector.empty),
-              firstSeqNr = 1L,
-              send))
+        val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg ⇒ Msg(msg))
+        producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
+        new ProducerController[A](ctx, producerId, producer, msgAdapter, timers).active(
+          State(
+            requested = true,
+            currentSeqNr = 1L,
+            confirmedSeqNr = 0L,
+            requestedSeqNr = 1L,
+            pendingReplies = Map.empty,
+            unconfirmed = Some(Vector.empty),
+            firstSeqNr = 1L,
+            send))
       }
     }
   }
 
 }
 
-private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
+private class ProducerController[A: ClassTag](
     ctx: ActorContext[ProducerController.InternalCommand],
     producerId: String,
-    producer: ActorRef[RequestNext],
-    requestNextFactory: ProducerController.RequestNextParam[B] ⇒ RequestNext,
-    msgAdapter: ActorRef[B],
+    producer: ActorRef[ProducerController.RequestNext[A]],
+    msgAdapter: ActorRef[A],
     timers: TimerScheduler[ProducerController.InternalCommand]) {
   import ProducerController._
   import ProducerController.Internal._
@@ -201,7 +196,7 @@ private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
           if (s.currentSeqNr == s.requestedSeqNr)
             false
           else {
-            producer ! requestNextFactory(RequestNextParam(s.currentSeqNr, s.confirmedSeqNr, msgAdapter))
+            producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, ctx.self)
             true
           }
         active(
@@ -218,7 +213,7 @@ private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
     }
 
     Behaviors.receiveMessage {
-      case Msg(MessageWithConfirmation(m: A, replyTo)) =>
+      case MessageWithConfirmation(m: A, replyTo) =>
         onMsg(m, s.pendingReplies.updated(s.currentSeqNr, replyTo))
       case Msg(m: A) ⇒
         onMsg(m, s.pendingReplies)
@@ -266,7 +261,7 @@ private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
 
         if (newRequestedSeqNr > s.requestedSeqNr) {
           if (!s.requested && (newRequestedSeqNr - s.currentSeqNr) > 0)
-            producer ! requestNextFactory(RequestNextParam(s.currentSeqNr, newConfirmedSeqNr, msgAdapter))
+            producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
           active(
             s.copy(
               requested = true,
@@ -306,7 +301,8 @@ private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
 
       case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
         val newFirstSeqNr =
-          if (s.unconfirmed.isEmpty) s.currentSeqNr else s.unconfirmed.map(_.head.seqNr).getOrElse(s.currentSeqNr)
+          if (s.unconfirmed.isEmpty || s.unconfirmed.get.isEmpty) s.currentSeqNr
+          else s.unconfirmed.map(_.head.seqNr).getOrElse(s.currentSeqNr)
         ctx.log.info(
           "Register new ConsumerController [{}], starting with seqNr [{}].",
           consumerController,
@@ -323,11 +319,7 @@ private class ProducerController[A: ClassTag, B: ClassTag, RequestNext](
   }
 }
 
-// FIXME it must be possible to restart the producer, and then it needs to retrieve the request state,
-// which would complicate the protocol. A more pragmatic, and easier to use, approach might be to
-// allow for buffering of messages from the producer in the ProducerController if it it has no demand.
-// Then the restarted producer can assume that it can send next message. As a recommendation it
-// should not abuse this capability.
+// FIXME it must be possible to restart the producer, sending new Start
 
 // FIXME there should also be a durable version of this (using EventSouredBehavior) that stores the
 // unconfirmed messages before sending and stores ack event when confirmed.

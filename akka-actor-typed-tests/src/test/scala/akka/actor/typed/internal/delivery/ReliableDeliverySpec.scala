@@ -37,13 +37,21 @@ object ReliableDeliverySpec {
     final case class RequestNext(sendTo: ActorRef[TestConsumer.Job]) extends Command
     private final case object Tick extends Command
 
-    def apply(delay: FiniteDuration): Behavior[Command] = {
-      if (delay == Duration.Zero)
-        activeNoDelay(1) // simulate fast producer
-      else {
-        Behaviors.withTimers { timers ⇒
-          timers.startTimerWithFixedDelay(Tick, Tick, delay)
-          idle(0)
+    def apply(
+        delay: FiniteDuration,
+        producerController: ActorRef[ProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
+      Behaviors.setup { context =>
+        val requestNextAdapter: ActorRef[ProducerController.RequestNext[TestConsumer.Job]] =
+          context.messageAdapter(req => RequestNext(req.sendNextTo))
+        producerController ! ProducerController.Start(requestNextAdapter)
+
+        if (delay == Duration.Zero)
+          activeNoDelay(1) // simulate fast producer
+        else {
+          Behaviors.withTimers { timers ⇒
+            timers.startTimerWithFixedDelay(Tick, Tick, delay)
+            idle(0)
+          }
         }
       }
     }
@@ -102,13 +110,15 @@ object ReliableDeliverySpec {
         confirmTo: ActorRef[ConsumerController.Confirmed])
         extends Command
 
+    final case class CollectedProducerIds(producerIds: Set[String])
+
     final case class AddConsumerController(controller: ActorRef[ConsumerController.Start[TestConsumer.Job]])
         extends Command
 
     def apply(
         delay: FiniteDuration,
         endCondition: SomeAsyncJob => Boolean,
-        endReplyTo: ActorRef[SomeAsyncJob],
+        endReplyTo: ActorRef[CollectedProducerIds],
         controller: ActorRef[ConsumerController.Start[TestConsumer.Job]]): Behavior[Command] =
       Behaviors.setup { ctx ⇒
         val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
@@ -121,7 +131,7 @@ object ReliableDeliverySpec {
     def apply(
         delay: FiniteDuration,
         endCondition: SomeAsyncJob => Boolean,
-        endReplyTo: ActorRef[SomeAsyncJob]): Behavior[Command] =
+        endReplyTo: ActorRef[CollectedProducerIds]): Behavior[Command] =
       Behaviors.setup { ctx ⇒
         val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
           ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
@@ -132,7 +142,7 @@ object ReliableDeliverySpec {
   class TestConsumer(
       delay: FiniteDuration,
       endCondition: TestConsumer.SomeAsyncJob => Boolean,
-      endReplyTo: ActorRef[TestConsumer.SomeAsyncJob],
+      endReplyTo: ActorRef[TestConsumer.CollectedProducerIds],
       deliverTo: ActorRef[ConsumerController.Delivery[TestConsumer.Job]]) {
     import TestConsumer._
 
@@ -159,7 +169,7 @@ object ReliableDeliverySpec {
             confirmTo ! ConsumerController.Confirmed(seqNr)
 
             if (endCondition(job)) {
-              endReplyTo ! job
+              endReplyTo ! CollectedProducerIds(processed.map(_._1))
               Behaviors.stopped
             } else
               active(cleanProcessed + (producerId -> seqNr))
@@ -176,7 +186,7 @@ object ReliableDeliverySpec {
   object TestProducerWithConfirmation {
 
     trait Command
-    final case class RequestNext(sendTo: ActorRef[ProducerController.MessageWithConfirmation[TestConsumer.Job]])
+    final case class RequestNext(askTo: ActorRef[ProducerController.MessageWithConfirmation[TestConsumer.Job]])
         extends Command
     private case object Tick extends Command
     private final case class Confirmed(seqNr: Long) extends Command
@@ -184,10 +194,19 @@ object ReliableDeliverySpec {
 
     private implicit val askTimeout: Timeout = 10.seconds
 
-    def apply(delay: FiniteDuration, replyProbe: ActorRef[Long]): Behavior[Command] = {
-      Behaviors.withTimers { timers ⇒
-        timers.startTimerWithFixedDelay(Tick, Tick, delay)
-        idle(0, replyProbe)
+    def apply(
+        delay: FiniteDuration,
+        replyProbe: ActorRef[Long],
+        producerController: ActorRef[ProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
+      Behaviors.setup { context =>
+        val requestNextAdapter: ActorRef[ProducerController.RequestNext[TestConsumer.Job]] =
+          context.messageAdapter(req => RequestNext(req.askNextTo))
+        producerController ! ProducerController.Start(requestNextAdapter)
+
+        Behaviors.withTimers { timers ⇒
+          timers.startTimerWithFixedDelay(Tick, Tick, delay)
+          idle(0, replyProbe)
+        }
       }
     }
 
@@ -236,6 +255,51 @@ object ReliableDeliverySpec {
 
   }
 
+  object TestProducerWorkPulling {
+
+    trait Command
+    final case class RequestNext(sendTo: ActorRef[TestConsumer.Job]) extends Command
+    private final case object Tick extends Command
+
+    def apply(
+        delay: FiniteDuration,
+        producerController: ActorRef[WorkPullingProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
+      Behaviors.setup { context =>
+        val requestNextAdapter: ActorRef[WorkPullingProducerController.RequestNext[TestConsumer.Job]] =
+          context.messageAdapter(req => RequestNext(req.sendNextTo))
+        producerController ! WorkPullingProducerController.Start(requestNextAdapter)
+
+        Behaviors.withTimers { timers ⇒
+          timers.startTimerWithFixedDelay(Tick, Tick, delay)
+          idle(0)
+        }
+      }
+    }
+
+    private def idle(n: Int): Behavior[Command] = {
+      Behaviors.receiveMessage {
+        case Tick ⇒ Behaviors.same
+        case RequestNext(sendTo) ⇒ active(n + 1, sendTo)
+      }
+    }
+
+    private def active(n: Int, sendTo: ActorRef[TestConsumer.Job]): Behavior[Command] = {
+      Behaviors.receive { (ctx, msg) ⇒
+        msg match {
+          case Tick ⇒
+            val msg = s"msg-$n"
+            ctx.log.info("sent {}", msg)
+            sendTo ! TestConsumer.Job(msg)
+            idle(n)
+
+          case RequestNext(_) ⇒
+            throw new IllegalStateException("Unexpected RequestNext, already got one.")
+        }
+      }
+    }
+
+  }
+
   object TestShardingProducer {
 
     trait Command
@@ -243,11 +307,17 @@ object ReliableDeliverySpec {
 
     private final case object Tick extends Command
 
-    def apply(): Behavior[Command] = {
-      // simulate fast producer
-      Behaviors.withTimers { timers ⇒
-        timers.startTimerWithFixedDelay(Tick, Tick, 20.millis)
-        idle(0)
+    def apply(producerController: ActorRef[ShardingProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
+      Behaviors.setup { context =>
+        val requestNextAdapter: ActorRef[ShardingProducerController.RequestNext[TestConsumer.Job]] =
+          context.messageAdapter(req => RequestNext(req.sendNextTo))
+        producerController ! ShardingProducerController.Start(requestNextAdapter)
+
+        // simulate fast producer
+        Behaviors.withTimers { timers ⇒
+          timers.startTimerWithFixedDelay(Tick, Tick, 20.millis)
+          idle(0)
+        }
       }
     }
 
@@ -281,7 +351,7 @@ object ReliableDeliverySpec {
     def apply(
         delay: FiniteDuration,
         endCondition: TestConsumer.SomeAsyncJob => Boolean,
-        endReplyTo: ActorRef[TestConsumer.SomeAsyncJob])
+        endReplyTo: ActorRef[TestConsumer.CollectedProducerIds])
         : Behavior[ConsumerController.SequencedMessage[TestConsumer.Job]] = {
       Behaviors.setup { context =>
         val consumer = context.spawn(TestConsumer(delay, endCondition, endReplyTo), name = "consumer")
@@ -363,23 +433,16 @@ class ReliableDeliverySpec
 
     "illustrate point-to-point usage" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
-      val producer = spawn(TestProducer(defaultProducerDelay), name = s"producer-${idCount}")
       val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            // FIXME too bad that the type of the nextParam can't be infered
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer),
-          s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -394,7 +457,7 @@ class ReliableDeliverySpec
 
     "illustrate point-to-point usage with confirmations" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
       spawn(
@@ -403,18 +466,12 @@ class ReliableDeliverySpec
 
       val replyProbe = createTestProbe[Long]()
 
-      val producer =
-        spawn(TestProducerWithConfirmation(defaultProducerDelay, replyProbe.ref), name = s"producer-${idCount}")
       val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producer =
         spawn(
-          ProducerController.withConfirmation[TestConsumer.Job, TestProducerWithConfirmation.RequestNext](
-            s"p-${idCount}",
-            // FIXME too bad that the type of the nextParam can't be infered
-            (nextParam: ProducerController.RequestNextParam[
-              ProducerController.MessageWithConfirmation[TestConsumer.Job]]) =>
-              TestProducerWithConfirmation.RequestNext(nextParam.sendNextTo),
-            producer),
-          s"producerController-${idCount}")
+          TestProducerWithConfirmation(defaultProducerDelay, replyProbe.ref, producerController),
+          name = s"producer-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -431,24 +488,19 @@ class ReliableDeliverySpec
 
     "illustrate work-pulling usage" in {
       nextId()
-      val jobProducer = spawn(TestProducer(defaultProducerDelay), name = s"jobProducer-${idCount}")
-      // FIXME unfortunate that the types of the WorkPullingController can't be inferred
       val workPullingController =
-        spawn(
-          WorkPullingProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            TestProducer.RequestNext(_),
-            jobProducer),
-          s"workPullingController-${idCount}")
+        spawn(WorkPullingProducerController[TestConsumer.Job](s"p-${idCount}"), s"workPullingController-${idCount}")
+      val jobProducer =
+        spawn(TestProducerWorkPulling(defaultProducerDelay, workPullingController), name = s"jobProducer-${idCount}")
 
-      val consumerEndProbe1 = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe1 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val workerController1 =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"workerController1-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe1.ref, workerController1),
         name = s"worker1-${idCount}")
 
-      val consumerEndProbe2 = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe2 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val workerController2 =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"workerController2-${idCount}")
       spawn(
@@ -476,25 +528,19 @@ class ReliableDeliverySpec
 
     "illustrate sharding usage" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
         spawn(
           SimuatedSharding(
             _ => TestShardingConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref)),
           s"sharding-${idCount}")
 
-      val producer = spawn(TestShardingProducer(), name = s"shardingProducer-${idCount}")
       val shardingController =
-        spawn(
-          ShardingProducerController[TestConsumer.Job, TestShardingProducer.RequestNext](
-            s"p-${idCount}",
-            TestShardingProducer.RequestNext(_),
-            producer,
-            sharding),
-          s"shardingController-${idCount}")
+        spawn(ShardingProducerController[TestConsumer.Job](s"p-${idCount}", sharding), s"shardingController-${idCount}")
+      val producer = spawn(TestShardingProducer(shardingController), name = s"shardingProducer-${idCount}")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
-      consumerEndProbe.receiveMessages(3, 5.seconds).map(_.producerId)
+      consumerEndProbe.receiveMessages(3, 5.seconds)
 
       testKit.stop(producer)
       testKit.stop(shardingController)
@@ -503,37 +549,40 @@ class ReliableDeliverySpec
 
     "illustrate sharding usage with several producers" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
         spawn(
           SimuatedSharding(
             _ => TestShardingConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref)),
           s"sharding-${idCount}")
 
-      val producer1 = spawn(TestShardingProducer(), name = s"shardingProducer1-${idCount}")
       val shardingController1 =
         spawn(
-          ShardingProducerController[TestConsumer.Job, TestShardingProducer.RequestNext](
+          ShardingProducerController[TestConsumer.Job](
             s"p1-${idCount}", // note different producerId
-            TestShardingProducer.RequestNext(_),
-            producer1,
             sharding),
           s"shardingController1-${idCount}")
+      val producer1 = spawn(TestShardingProducer(shardingController1), name = s"shardingProducer1-${idCount}")
 
-      val producer2 = spawn(TestShardingProducer(), name = s"shardingProducer2-${idCount}")
       val shardingController2 =
         spawn(
-          ShardingProducerController[TestConsumer.Job, TestShardingProducer.RequestNext](
+          ShardingProducerController[TestConsumer.Job](
             s"p2-${idCount}", // note different producerId
-            TestShardingProducer.RequestNext(_),
-            producer2,
             sharding),
           s"shardingController2-${idCount}")
+      val producer2 = spawn(TestShardingProducer(shardingController2), name = s"shardingProducer2-${idCount}")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
       val endMessages = consumerEndProbe.receiveMessages(3, 5.seconds)
       // verify that they received messages from both producers
-      endMessages.map(_.producerId).toSet should ===(Set(s"p1-${idCount}", s"p2-${idCount}"))
+      endMessages.flatMap(_.producerIds).toSet should ===(
+        Set(
+          s"p1-${idCount}-entity-0",
+          s"p1-${idCount}-entity-1",
+          s"p1-${idCount}-entity-2",
+          s"p2-${idCount}-entity-0",
+          s"p2-${idCount}-entity-1",
+          s"p2-${idCount}-entity-2"))
 
       testKit.stop(producer1)
       testKit.stop(producer2)
@@ -544,22 +593,16 @@ class ReliableDeliverySpec
 
     def testWithDelays(producerDelay: FiniteDuration, consumerDelay: FiniteDuration): Unit = {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
       spawn(
         TestConsumer(consumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
-      val producer = spawn(TestProducer(producerDelay), name = s"producer-${idCount}")
       val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer),
-          s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -586,22 +629,16 @@ class ReliableDeliverySpec
 
     "allow replacement of destination" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController1-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
         s"consumer1-${idCount}")
 
-      val producer = spawn(TestProducer(defaultProducerDelay), name = s"producer-${idCount}")
       val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer),
-          s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -609,7 +646,7 @@ class ReliableDeliverySpec
 
       consumerEndProbe.receiveMessage(5.seconds)
 
-      val consumerEndProbe2 = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe2 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController2 =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController2-${idCount}")
       spawn(
@@ -627,22 +664,16 @@ class ReliableDeliverySpec
 
     "allow replacement of producer" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
-      val producer1 = spawn(TestProducer(defaultProducerDelay), name = s"producer1-${idCount}")
       val producerController1 =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer1),
-          s"producerController1-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController1-${idCount}")
+      val producer1 = spawn(TestProducer(defaultProducerDelay, producerController1), name = s"producer1-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController1 ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -653,15 +684,12 @@ class ReliableDeliverySpec
       testKit.stop(producer1)
       testKit.stop(producerController1)
 
-      val producer2 = spawn(TestProducer(defaultProducerDelay), name = s"producer2-${idCount}")
       val producerController2 =
         spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}", // must keep the same producerId
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer2),
+          ProducerController[TestConsumer.Job](s"p-${idCount}" // must keep the same producerId
+          ),
           s"producerController2-${idCount}")
+      val producer2 = spawn(TestProducer(defaultProducerDelay, producerController2), name = s"producer2-${idCount}")
 
       producerController2 ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
       registerDoneProbe.expectMessage(Done)
@@ -683,7 +711,7 @@ class ReliableDeliverySpec
         case _                                         => 0.0
       }
 
-      val consumerEndProbe = createTestProbe[TestConsumer.SomeAsyncJob]()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(
           Behaviors.intercept(() => RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](consumerDrop))(
@@ -693,7 +721,6 @@ class ReliableDeliverySpec
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
-      val producer = spawn(TestProducer(defaultProducerDelay), name = s"producer-${idCount}")
       // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
       val producerDrop: Any => Double = {
         case _: ProducerController.Internal.Request => 0.3
@@ -703,12 +730,9 @@ class ReliableDeliverySpec
 
       val producerController = spawn(
         Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](producerDrop))(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producer)),
+          ProducerController[TestConsumer.Job](s"p-${idCount}")),
         s"producerController-${idCount}")
+      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
@@ -728,22 +752,17 @@ class ReliableDeliverySpec
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
 
-      val producerProbe = createTestProbe[TestProducer.RequestNext]()
       val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producerProbe.ref),
-          s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
       registerDoneProbe.expectMessage(Done)
 
       // initial RequestNext
-      val sendTo = producerProbe.receiveMessage().sendTo
+      val sendTo = producerProbe.receiveMessage().sendNextTo
 
       consumerController ! ConsumerController.Start(consumerProbe.ref)
       sendTo ! TestConsumer.Job("msg-1")
@@ -778,22 +797,17 @@ class ReliableDeliverySpec
       nextId()
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
-      val producerProbe = createTestProbe[TestProducer.RequestNext]()
       val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job, TestProducer.RequestNext](
-            s"p-${idCount}",
-            (nextParam: ProducerController.RequestNextParam[TestConsumer.Job]) =>
-              TestProducer.RequestNext(nextParam.sendNextTo),
-            producerProbe.ref),
-          s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
 
       val registerDoneProbe = createTestProbe[Done]()
       producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref, registerDoneProbe.ref)
       registerDoneProbe.expectMessage(Done)
 
-      val producer = producerProbe.receiveMessage().sendTo
-      producer ! TestConsumer.Job("msg-1")
+      val sendTo = producerProbe.receiveMessage().sendNextTo
+      sendTo ! TestConsumer.Job("msg-1")
 
       val internalProducerController = producerController.unsafeUpcast[ProducerController.InternalCommand]
 
