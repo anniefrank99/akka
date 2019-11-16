@@ -4,10 +4,9 @@
 
 package akka.actor.typed.internal.delivery
 
-import java.util.concurrent.ThreadLocalRandom
-
 import scala.concurrent.duration._
 import scala.util.Failure
+import scala.util.Random
 import scala.util.Success
 
 import akka.Done
@@ -389,16 +388,16 @@ object ReliableDeliverySpec {
   }
 
   object RandomFlakyNetwork {
-    def apply[T](dropProbability: Any => Double): BehaviorInterceptor[T, T] =
-      new RandomFlakyNetwork(dropProbability).asInstanceOf[BehaviorInterceptor[T, T]]
+    def apply[T](rnd: Random, dropProbability: Any => Double): BehaviorInterceptor[T, T] =
+      new RandomFlakyNetwork(rnd, dropProbability).asInstanceOf[BehaviorInterceptor[T, T]]
   }
 
-  class RandomFlakyNetwork(dropProbability: Any => Double) extends BehaviorInterceptor[Any, Any] {
+  class RandomFlakyNetwork(rnd: Random, dropProbability: Any => Double) extends BehaviorInterceptor[Any, Any] {
     override def aroundReceive(
         ctx: TypedActorContext[Any],
         msg: Any,
         target: BehaviorInterceptor.ReceiveTarget[Any]): Behavior[Any] = {
-      if (ThreadLocalRandom.current().nextDouble() < dropProbability(msg)) {
+      if (rnd.nextDouble() < dropProbability(msg)) {
         ctx.asScala.log.info("dropped {}", msg)
         Behaviors.same
       } else {
@@ -691,39 +690,56 @@ class ReliableDeliverySpec
 
     "work with flaky network" in {
       nextId()
+
+      val rndSeed = System.currentTimeMillis()
+      val rnd = new Random(rndSeed)
+      val consumerDropProbability = 0.1 + rnd.nextDouble() * 0.4
+      val producerDropProbability = 0.1 + rnd.nextDouble() * 0.3
+      val consumerDelay = rnd.nextInt(40).millis
+      val producerDelay = rnd.nextInt(40).millis
+      system.log.infoN(
+        "Random seed [{}], consumerDropProbability [{}], producerDropProbability [{}], " +
+        "consumerDelay [{}], producerDelay [{}]",
+        rndSeed,
+        consumerDropProbability,
+        producerDropProbability,
+        consumerDelay,
+        producerDelay)
+
       // RandomFlakyNetwork to simulate lost messages from producerController to consumerController
       val consumerDrop: Any => Double = {
-        case _: ConsumerController.SequencedMessage[_] => 0.1
+        case _: ConsumerController.SequencedMessage[_] => consumerDropProbability
         case _                                         => 0.0
       }
 
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
         spawn(
-          Behaviors.intercept(() => RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](consumerDrop))(
+          Behaviors.intercept(() =>
+            RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](rnd, consumerDrop))(
             ConsumerController[TestConsumer.Job](resendLost = true)),
           s"consumerController-${idCount}")
       spawn(
-        TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe.ref, consumerController),
+        TestConsumer(consumerDelay, consumerEndCondition(63), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
       // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
       val producerDrop: Any => Double = {
-        case _: ProducerController.Internal.Request    => 0.3
-        case _: ProducerController.Internal.Resend     => 0.3
-        case _: ProducerController.RegisterConsumer[_] => 0.2
+        case _: ProducerController.Internal.Request    => producerDropProbability
+        case _: ProducerController.Internal.Resend     => producerDropProbability
+        case _: ProducerController.RegisterConsumer[_] => producerDropProbability
         case _                                         => 0.0
       }
 
       val producerController = spawn(
-        Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](producerDrop))(
+        Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](rnd, producerDrop))(
           ProducerController[TestConsumer.Job](s"p-${idCount}")),
         s"producerController-${idCount}")
-      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
+      val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
 
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
-      consumerEndProbe.receiveMessage(30.seconds)
+      consumerEndProbe.receiveMessage(120.seconds)
 
       testKit.stop(producer)
       testKit.stop(producerController)

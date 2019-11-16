@@ -277,7 +277,8 @@ private class ProducerController[A: ClassTag](
         s.unconfirmed match {
           case Some(u) ⇒
             val newUnconfirmed = u.dropWhile(_.seqNr < fromSeqNr)
-            ctx.log.info("resending [{}]", newUnconfirmed.map(_.seqNr).mkString(", "))
+            if (u.nonEmpty)
+              ctx.log.info("resending [{} - {}]", u.head.seqNr, u.last.seqNr)
             newUnconfirmed.foreach(s.send)
             active(s.copy(unconfirmed = Some(newUnconfirmed)))
           case None ⇒
