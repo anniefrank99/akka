@@ -64,6 +64,9 @@ object ConsumerController {
   final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
   final case class Confirmed(seqNr: Long) extends InternalCommand
 
+  final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
+      extends Command[A]
+
   private final case class State(
       producer: ActorRef[ProducerController.InternalCommand],
       receivedSeqNr: Long,
@@ -74,69 +77,82 @@ object ConsumerController {
   def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { ctx ⇒
-        Behaviors.withStash(100) { stashBuffer =>
-          def becomeActive(
-              producerId: String,
-              producer: ActorRef[ProducerController.InternalCommand],
-              start: Start[A],
-              firstSeqNr: Long): Behavior[InternalCommand] = {
-            val requestedSeqNr = firstSeqNr - 1 + RequestWindow
+        Behaviors.withTimers { timers =>
+          Behaviors.withStash(100) { stashBuffer =>
+            def becomeActive(
+                producerId: String,
+                producer: ActorRef[ProducerController.InternalCommand],
+                start: Start[A],
+                firstSeqNr: Long): Behavior[InternalCommand] = {
+              val requestedSeqNr = firstSeqNr - 1 + RequestWindow
 
-            // FIXME adjust all logging, most should probably be debug
-            ctx.log.infoN(
-              "Become active for producer [{}] / [{}], requestedSeqNr [{}]",
-              producerId,
-              producer,
-              requestedSeqNr)
+              // FIXME adjust all logging, most should probably be debug
+              ctx.log.infoN(
+                "Become active for producer [{}] / [{}], requestedSeqNr [{}]",
+                producerId,
+                producer,
+                requestedSeqNr)
 
-            producer ! ProducerController.Internal.Request(
-              confirmedSeqNr = 0,
-              requestedSeqNr,
-              resendLost,
-              viaTimeout = false)
+              producer ! ProducerController.Internal.Request(
+                confirmedSeqNr = 0,
+                requestedSeqNr,
+                resendLost,
+                viaTimeout = false)
 
-            Behaviors.withTimers { timers =>
               val next = new ConsumerController[A](ctx, timers, producerId, start.deliverTo, stashBuffer, resendLost)
                 .active(State(producer, receivedSeqNr = 0, requestedSeqNr))
               stashBuffer.unstashAll(next)
             }
-          }
 
-          // wait for both the `Start` message from the consumer and the first `SequencedMessage` from the producer
-          def idle(
-              producer: Option[(String, ActorRef[ProducerController.InternalCommand])],
-              start: Option[Start[A]],
-              firstSeqNr: Long): Behavior[InternalCommand] = {
-            Behaviors.receiveMessagePartial {
-              case s: Start[A] @unchecked =>
-                producer match {
-                  case None           => idle(None, Some(s), firstSeqNr)
-                  case Some((pid, p)) => becomeActive(pid, p, s, firstSeqNr)
+            // wait for both the `Start` message from the consumer and the first `SequencedMessage` from the producer
+            def idle(
+                register: Option[ActorRef[ProducerController.Command[A]]],
+                producer: Option[(String, ActorRef[ProducerController.InternalCommand])],
+                start: Option[Start[A]],
+                firstSeqNr: Long): Behavior[InternalCommand] = {
+              Behaviors.receiveMessagePartial {
+                case reg: RegisterToProducerController[A] @unchecked =>
+                  reg.producerController ! ProducerController.RegisterConsumer(ctx.self)
+                  idle(Some(reg.producerController), producer, start, firstSeqNr)
 
-                }
+                case s: Start[A] @unchecked =>
+                  producer match {
+                    case None           => idle(register, None, Some(s), firstSeqNr)
+                    case Some((pid, p)) => becomeActive(pid, p, s, firstSeqNr)
 
-              case seqMsg: SequencedMessage[A] @unchecked =>
-                if (seqMsg.first) {
-                  ctx.log.info("Received first SequencedMessage [{}]", seqMsg.seqNr)
-                  stashBuffer.stash(seqMsg)
-                  start match {
-                    case None    => idle(Some((seqMsg.producerId, seqMsg.producer)), start, seqMsg.seqNr)
-                    case Some(s) => becomeActive(seqMsg.producerId, seqMsg.producer, s, seqMsg.seqNr)
                   }
-                } else if (seqMsg.seqNr > firstSeqNr) {
-                  ctx.log.info("Stashing non-first SequencedMessage [{}]", seqMsg.seqNr)
-                  stashBuffer.stash(seqMsg)
+
+                case seqMsg: SequencedMessage[A] @unchecked =>
+                  if (seqMsg.first) {
+                    ctx.log.info("Received first SequencedMessage [{}]", seqMsg.seqNr)
+                    stashBuffer.stash(seqMsg)
+                    start match {
+                      case None    => idle(None, Some((seqMsg.producerId, seqMsg.producer)), start, seqMsg.seqNr)
+                      case Some(s) => becomeActive(seqMsg.producerId, seqMsg.producer, s, seqMsg.seqNr)
+                    }
+                  } else if (seqMsg.seqNr > firstSeqNr) {
+                    ctx.log.info("Stashing non-first SequencedMessage [{}]", seqMsg.seqNr)
+                    stashBuffer.stash(seqMsg)
+                    Behaviors.same
+                  } else {
+                    ctx.log.info("Dropping non-first SequencedMessage [{}]", seqMsg.seqNr)
+                    Behaviors.same
+                  }
+
+                case Retry =>
+                  register.foreach { reg =>
+                    ctx.log.info("retry RegisterConsumer to [{}]", reg)
+                    reg ! ProducerController.RegisterConsumer(ctx.self)
+                  }
                   Behaviors.same
-                } else {
-                  ctx.log.info("Dropping non-first SequencedMessage [{}]", seqMsg.seqNr)
-                  Behaviors.same
-                }
+
+              }
 
             }
 
+            timers.startTimerWithFixedDelay(Retry, Retry, 1.second) // FIXME config interval
+            idle(None, None, None, 1L)
           }
-
-          idle(None, None, 1L)
         }
       }
       .narrow // expose Command, but not InternalCommand
@@ -197,6 +213,9 @@ private class ConsumerController[A](
 
       case Start(_) =>
         Behaviors.unhandled
+
+      case _: RegisterToProducerController[_] =>
+        Behaviors.unhandled // already registered
     }
   }
 
@@ -233,6 +252,9 @@ private class ConsumerController[A](
 
       case Start(_) =>
         Behaviors.unhandled
+
+      case _: RegisterToProducerController[_] =>
+        Behaviors.unhandled // already registered
     }
   }
 

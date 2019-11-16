@@ -7,7 +7,6 @@ package akka.actor.typed.internal.delivery
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
 
-import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl.ActorContext
@@ -68,10 +67,7 @@ object ProducerController {
       sendNextTo: ActorRef[A],
       askNextTo: ActorRef[MessageWithConfirmation[A]])
 
-  final case class RegisterConsumer[A](
-      consumerController: ActorRef[ConsumerController.Command[A]],
-      replyTo: ActorRef[Done])
-      extends Command[A]
+  final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
 
   /**
    * For sending confirmation message back to the producer when the message has been fully delivered, processed,
@@ -128,8 +124,7 @@ object ProducerController {
       thenBecomeActive: (ActorRef[RequestNext[A]], ActorRef[ConsumerController.Command[A]]) => Behavior[InternalCommand])
       : Behavior[InternalCommand] = {
     Behaviors.receiveMessagePartial[InternalCommand] {
-      case RegisterConsumer(c: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
-        replyTo ! Done
+      case RegisterConsumer(c: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         producer match {
           case Some(p) => thenBecomeActive(p, c)
           case None    => waitingForStart(producer, Some(c))(thenBecomeActive)
@@ -300,7 +295,7 @@ private class ProducerController[A: ClassTag](
         }
         Behaviors.same
 
-      case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
+      case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         val newFirstSeqNr =
           if (s.unconfirmed.isEmpty || s.unconfirmed.get.isEmpty) s.currentSeqNr
           else s.unconfirmed.map(_.head.seqNr).getOrElse(s.currentSeqNr)
@@ -312,7 +307,6 @@ private class ProducerController[A: ClassTag](
           timers.startTimerWithFixedDelay(ResendFirst, ResendFirst, 1.second)
           ctx.self ! ResendFirst
         }
-        replyTo ! Done
         // update the send function
         val newSend = consumerController ! _
         active(s.copy(firstSeqNr = newFirstSeqNr, send = newSend))

@@ -444,9 +444,7 @@ class ReliableDeliverySpec
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
       val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe.receiveMessage(5.seconds)
 
@@ -473,9 +471,7 @@ class ReliableDeliverySpec
           TestProducerWithConfirmation(defaultProducerDelay, replyProbe.ref, producerController),
           name = s"producer-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe.receiveMessage(5.seconds)
 
@@ -604,9 +600,7 @@ class ReliableDeliverySpec
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
       val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe.receiveMessage(5.seconds)
 
@@ -640,9 +634,7 @@ class ReliableDeliverySpec
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
       val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe.receiveMessage(5.seconds)
 
@@ -652,8 +644,7 @@ class ReliableDeliverySpec
       spawn(
         TestConsumer(defaultConsumerDelay, consumerEndCondition(42), consumerEndProbe2.ref, consumerController2),
         s"consumer2-${idCount}")
-      producerController ! ProducerController.RegisterConsumer(consumerController2, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController2 ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe2.receiveMessage(5.seconds)
 
@@ -675,9 +666,7 @@ class ReliableDeliverySpec
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController1-${idCount}")
       val producer1 = spawn(TestProducer(defaultProducerDelay, producerController1), name = s"producer1-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController1 ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      producerController1 ! ProducerController.RegisterConsumer(consumerController)
 
       // FIXME better way of testing this
       Thread.sleep(300)
@@ -691,8 +680,7 @@ class ReliableDeliverySpec
           s"producerController2-${idCount}")
       val producer2 = spawn(TestProducer(defaultProducerDelay, producerController2), name = s"producer2-${idCount}")
 
-      producerController2 ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      producerController2 ! ProducerController.RegisterConsumer(consumerController)
 
       consumerEndProbe.receiveMessage(5.seconds)
 
@@ -721,9 +709,10 @@ class ReliableDeliverySpec
 
       // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
       val producerDrop: Any => Double = {
-        case _: ProducerController.Internal.Request => 0.3
-        case _: ProducerController.Internal.Resend  => 0.3
-        case _                                      => 0.0
+        case _: ProducerController.Internal.Request    => 0.3
+        case _: ProducerController.Internal.Resend     => 0.3
+        case _: ProducerController.RegisterConsumer[_] => 0.2
+        case _                                         => 0.0
       }
 
       val producerController = spawn(
@@ -732,9 +721,7 @@ class ReliableDeliverySpec
         s"producerController-${idCount}")
       val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       consumerEndProbe.receiveMessage(30.seconds)
 
@@ -755,9 +742,7 @@ class ReliableDeliverySpec
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerController, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
       // initial RequestNext
       val sendTo = producerProbe.receiveMessage().sendNextTo
@@ -800,9 +785,7 @@ class ReliableDeliverySpec
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
-      val registerDoneProbe = createTestProbe[Done]()
-      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref, registerDoneProbe.ref)
-      registerDoneProbe.expectMessage(Done)
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
 
       val sendTo = producerProbe.receiveMessage().sendNextTo
       sendTo ! TestConsumer.Job("msg-1")

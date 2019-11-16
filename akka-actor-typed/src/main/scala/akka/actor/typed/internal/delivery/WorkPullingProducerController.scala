@@ -79,8 +79,6 @@ class WorkPullingProducerController[A: ClassTag](
   private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WrappedRequestNext.apply)
 
-  private val registerConsumerDoneAapter: ActorRef[Done] = context.messageAdapter(_ => RegisterConsumerDone)
-
   private def active(s: State[A]): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
       case RegisterWorker(c: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
@@ -90,7 +88,7 @@ class WorkPullingProducerController[A: ClassTag](
         val outKey = s"$producerId-$newProducerIdCount"
         val p = context.spawnAnonymous(ProducerController[A](outKey, seqMsg => c ! seqMsg))
         p ! ProducerController.Start(requestNextAdapter)
-        p ! ProducerController.RegisterConsumer(c, registerConsumerDoneAapter)
+        p ! ProducerController.RegisterConsumer(c)
         replyTo ! Done
         // FIXME watch and deregistration not implemented yet
         active(s.copy(out = s.out.updated(outKey, OutState(p, c, None)), producerIdCount = newProducerIdCount))
