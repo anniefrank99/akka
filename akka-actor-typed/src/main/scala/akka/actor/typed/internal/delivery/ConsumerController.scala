@@ -12,6 +12,7 @@ import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
+import akka.actor.typed.scaladsl.TimerScheduler
 import akka.annotation.InternalApi
 
 // FIXME Scaladoc describes how it works, internally. Rewrite for end user and keep internals as impl notes.
@@ -57,7 +58,7 @@ object ConsumerController {
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerController.InternalCommand])
       extends Command[A]
-  private final case object RetryRequest extends InternalCommand
+  private final case object Retry extends InternalCommand
 
   final case class Delivery[A](producerId: String, seqNr: Long, msg: A, confirmTo: ActorRef[Confirmed])
   final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
@@ -92,12 +93,13 @@ object ConsumerController {
               confirmedSeqNr = 0,
               requestedSeqNr,
               resendLost,
-              viaReceiveTimeout = false)
+              viaTimeout = false)
 
-            ctx.setReceiveTimeout(1.second, RetryRequest)
-            val next = new ConsumerController[A](ctx, producerId, start.deliverTo, stashBuffer, resendLost)
-              .active(State(producer, receivedSeqNr = 0, requestedSeqNr))
-            stashBuffer.unstashAll(next)
+            Behaviors.withTimers { timers =>
+              val next = new ConsumerController[A](ctx, timers, producerId, start.deliverTo, stashBuffer, resendLost)
+                .active(State(producer, receivedSeqNr = 0, requestedSeqNr))
+              stashBuffer.unstashAll(next)
+            }
           }
 
           // wait for both the `Start` message from the consumer and the first `SequencedMessage` from the producer
@@ -144,10 +146,13 @@ object ConsumerController {
 
 private class ConsumerController[A](
     context: ActorContext[ConsumerController.InternalCommand],
+    timers: TimerScheduler[ConsumerController.InternalCommand],
     producerId: String,
     deliverTo: ActorRef[ConsumerController.Delivery[A]],
     stashBuffer: StashBuffer[ConsumerController.InternalCommand],
     resendLost: Boolean) {
+
+  startRetryTimer()
 
   import ConsumerController._
   import ProducerController.Internal.Request
@@ -183,7 +188,7 @@ private class ConsumerController[A](
           Behaviors.same
         }
 
-      case RetryRequest ⇒
+      case Retry ⇒
         retryRequest(s)
 
       case Confirmed(seqNr) ⇒
@@ -216,7 +221,7 @@ private class ConsumerController[A](
           Behaviors.same // ignore until we receive the expected
         }
 
-      case RetryRequest ⇒
+      case Retry ⇒
         // in case the Resend message was lost
         context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
         s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
@@ -253,12 +258,13 @@ private class ConsumerController[A](
             // confirm the first message immediately to cancel resending of first
             val newRequestedSeqNr = seqNr - 1 + RequestWindow
             context.log.info("Request after first [{}]", newRequestedSeqNr)
-            s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaReceiveTimeout = false)
+            s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
             newRequestedSeqNr
           } else if ((s.requestedSeqNr - seqNr) == RequestWindow / 2) {
             val newRequestedSeqNr = s.requestedSeqNr + RequestWindow / 2
             context.log.info("Request [{}]", newRequestedSeqNr)
-            s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaReceiveTimeout = false)
+            s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
+            startRetryTimer() // reset interval since Request was just sent
             newRequestedSeqNr
           } else {
             s.requestedSeqNr
@@ -266,7 +272,7 @@ private class ConsumerController[A](
         // FIXME can we use unstashOne instead of all?
         stashBuffer.unstashAll(active(s.copy(receivedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
-      case RetryRequest ⇒
+      case Retry ⇒
         retryRequest(s)
 
       case msg ⇒
@@ -276,12 +282,16 @@ private class ConsumerController[A](
     }
   }
 
+  private def startRetryTimer(): Unit = {
+    timers.startTimerWithFixedDelay(Retry, Retry, 1.second) // FIXME config interval
+  }
+
   // in case the Request or the SequencedMessage triggering the Request is lost
   private def retryRequest(s: State) = {
     val newRequestedSeqNr = s.receivedSeqNr + RequestWindow
     context.log.info("retry Request [{}]", newRequestedSeqNr)
     // FIXME may watch the producer to avoid sending retry Request to dead producer
-    s.producer ! Request(s.receivedSeqNr, newRequestedSeqNr, resendLost, viaReceiveTimeout = true)
+    s.producer ! Request(s.receivedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
     active(s.copy(requestedSeqNr = newRequestedSeqNr))
   }
 

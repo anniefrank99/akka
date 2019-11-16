@@ -80,7 +80,7 @@ object ProducerController {
   final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
 
   object Internal {
-    final case class Request(confirmedSeqNr: Long, upToSeqNr: Long, supportResend: Boolean, viaReceiveTimeout: Boolean)
+    final case class Request(confirmedSeqNr: Long, upToSeqNr: Long, supportResend: Boolean, viaTimeout: Boolean)
         extends InternalCommand {
       require(confirmedSeqNr < upToSeqNr)
     }
@@ -218,7 +218,7 @@ private class ProducerController[A: ClassTag](
       case Msg(m: A) ⇒
         onMsg(m, s.pendingReplies)
 
-      case Request(newConfirmedSeqNr, newRequestedSeqNr, supportResend, viaReceiveTimeout) ⇒
+      case Request(newConfirmedSeqNr, newRequestedSeqNr, supportResend, viaTimeout) ⇒
         ctx.log.infoN(
           "request confirmed [{}], requested [{}], current [{}]",
           newConfirmedSeqNr,
@@ -251,10 +251,11 @@ private class ProducerController[A: ClassTag](
         if (newConfirmedSeqNr == s.firstSeqNr)
           timers.cancel(ResendFirst)
 
-        if (viaReceiveTimeout && newUnconfirmed.nonEmpty) {
+        if (viaTimeout && newUnconfirmed.nonEmpty) {
           // the last message was lost and no more message was sent that would trigger Resend
           newUnconfirmed.foreach { u ⇒
-            ctx.log.info("resending after ReceiveTimeout [{}]", u.map(_.seqNr).mkString(", "))
+            if (u.nonEmpty)
+              ctx.log.info("resending after Timeout [{} - {}]", u.head.seqNr, u.last.seqNr)
             u.foreach(s.send)
           }
         }
