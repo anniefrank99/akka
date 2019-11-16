@@ -702,8 +702,6 @@ class ReliableDeliverySpec
     }
 
     "work with flaky network" in {
-      // FIXME there is bug: if the first Request message from ConsumerController is dropped (some missing resending)
-
       nextId()
       // RandomFlakyNetwork to simulate lost messages from producerController to consumerController
       val consumerDrop: Any => Double = {

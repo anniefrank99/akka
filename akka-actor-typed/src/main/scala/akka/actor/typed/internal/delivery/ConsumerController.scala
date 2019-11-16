@@ -178,6 +178,8 @@ private class ConsumerController[A](
           }
         } else { // seqNr < expectedSeqNr
           context.log.infoN("from producer [{}], deduplicate [{}], expected [{}]", pid, seqNr, expectedSeqNr)
+          if (seqMsg.first)
+            retryRequest(s)
           Behaviors.same
         }
 
@@ -209,6 +211,8 @@ private class ConsumerController[A](
           waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), first)
         } else {
           context.log.infoN("from producer [{}], ignoring [{}], waiting for [{}]", pid, seqNr, s.receivedSeqNr + 1)
+          if (seqMsg.first)
+            retryRequest(s)
           Behaviors.same // ignore until we receive the expected
         }
 
