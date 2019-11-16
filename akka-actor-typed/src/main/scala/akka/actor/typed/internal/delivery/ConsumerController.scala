@@ -70,6 +70,7 @@ object ConsumerController {
   private final case class State(
       producer: ActorRef[ProducerController.InternalCommand],
       receivedSeqNr: Long,
+      confirmedSeqNr: Long,
       requestedSeqNr: Long)
 
   private val RequestWindow = 20 // FIXME should be a param, ofc
@@ -100,7 +101,7 @@ object ConsumerController {
                 viaTimeout = false)
 
               val next = new ConsumerController[A](ctx, timers, producerId, start.deliverTo, stashBuffer, resendLost)
-                .active(State(producer, receivedSeqNr = 0, requestedSeqNr))
+                .active(State(producer, receivedSeqNr = 0, confirmedSeqNr = 0, requestedSeqNr))
               stashBuffer.unstashAll(next)
             }
 
@@ -206,6 +207,7 @@ private class ConsumerController[A](
 
       case Retry ⇒
         retryRequest(s)
+        Behaviors.same
 
       case Confirmed(seqNr) ⇒
         context.log.warn("Unexpected confirmed [{}]", seqNr)
@@ -292,10 +294,11 @@ private class ConsumerController[A](
             s.requestedSeqNr
           }
         // FIXME can we use unstashOne instead of all?
-        stashBuffer.unstashAll(active(s.copy(receivedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
+        stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
       case Retry ⇒
         retryRequest(s)
+        Behaviors.same
 
       case msg ⇒
         context.log.info("Stash [{}]", msg)
@@ -309,12 +312,10 @@ private class ConsumerController[A](
   }
 
   // in case the Request or the SequencedMessage triggering the Request is lost
-  private def retryRequest(s: State) = {
-    val newRequestedSeqNr = s.receivedSeqNr + RequestWindow
-    context.log.info("retry Request [{}]", newRequestedSeqNr)
+  private def retryRequest(s: State): Unit = {
+    context.log.info("retry Request [{}]", s.requestedSeqNr)
     // FIXME may watch the producer to avoid sending retry Request to dead producer
-    s.producer ! Request(s.receivedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
-    active(s.copy(requestedSeqNr = newRequestedSeqNr))
+    s.producer ! Request(s.confirmedSeqNr, s.requestedSeqNr, resendLost, viaTimeout = true)
   }
 
   private def checkProducerId(producerId: String, incomingProducerId: String, seqNr: Long): Unit = {

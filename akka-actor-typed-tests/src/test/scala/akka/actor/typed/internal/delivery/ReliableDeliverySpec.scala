@@ -791,6 +791,9 @@ class ReliableDeliverySpec
       testKit.stop(producerController)
       testKit.stop(consumerController)
     }
+  }
+
+  "ProducerController" must {
 
     "resend initial SequencedMessage if lost" in {
       nextId()
@@ -829,6 +832,91 @@ class ReliableDeliverySpec
       // * when replacing producer
     }
 
+  }
+
+  "ConsumerController" must {
+    "resend RegisterConsumer" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe.ref)
+      producerControllerProbe.expectMessage(ProducerController.RegisterConsumer(consumerController))
+      producerControllerProbe.expectMessage(ProducerController.RegisterConsumer(consumerController))
+
+      testKit.stop(consumerController)
+    }
+
+    "resend initial Request" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      consumerController ! ConsumerController.SequencedMessage(
+        s"p-$idCount",
+        1,
+        TestConsumer.Job("msg-1"),
+        first = true)(producerControllerProbe.ref)
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, true))
+
+      consumerController ! ConsumerController.Confirmed(1)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      testKit.stop(consumerController)
+    }
+
+    "send Request after half window size" in {
+      nextId()
+      val windowSize = 20
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      (1 until windowSize / 2).foreach { n =>
+        consumerController ! ConsumerController.SequencedMessage(
+          s"p-$idCount",
+          n,
+          TestConsumer.Job(s"msg-$n"),
+          first = n == 1)(producerControllerProbe.ref)
+      }
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, windowSize, true, false))
+      (1 until windowSize / 2).foreach { n =>
+        consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+        consumerController ! ConsumerController.Confirmed(n)
+        if (n == 1)
+          producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, windowSize, true, false))
+      }
+
+      producerControllerProbe.expectNoMessage()
+
+      consumerController ! ConsumerController.SequencedMessage(
+        s"p-$idCount",
+        windowSize / 2,
+        TestConsumer.Job(s"msg-${windowSize / 2}"),
+        first = false)(producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      producerControllerProbe.expectNoMessage()
+      consumerController ! ConsumerController.Confirmed(windowSize / 2)
+      producerControllerProbe.expectMessage(
+        ProducerController.Internal.Request(windowSize / 2, windowSize + windowSize / 2, true, false))
+
+      testKit.stop(consumerController)
+    }
   }
 
 }
