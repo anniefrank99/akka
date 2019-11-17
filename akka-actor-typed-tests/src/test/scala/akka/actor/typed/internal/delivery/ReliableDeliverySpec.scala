@@ -47,7 +47,7 @@ object ReliableDeliverySpec {
         if (delay == Duration.Zero)
           activeNoDelay(1) // simulate fast producer
         else {
-          Behaviors.withTimers { timers ⇒
+          Behaviors.withTimers { timers =>
             timers.startTimerWithFixedDelay(Tick, Tick, delay)
             idle(0)
           }
@@ -57,28 +57,28 @@ object ReliableDeliverySpec {
 
     private def idle(n: Int): Behavior[Command] = {
       Behaviors.receiveMessage {
-        case Tick ⇒ Behaviors.same
-        case RequestNext(sendTo) ⇒ active(n + 1, sendTo)
+        case Tick                => Behaviors.same
+        case RequestNext(sendTo) => active(n + 1, sendTo)
       }
     }
 
     private def active(n: Int, sendTo: ActorRef[TestConsumer.Job]): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) ⇒
+      Behaviors.receive { (ctx, msg) =>
         msg match {
-          case Tick ⇒
+          case Tick =>
             sendMessage(n, sendTo, ctx)
             idle(n)
 
-          case RequestNext(_) ⇒
+          case RequestNext(_) =>
             throw new IllegalStateException("Unexpected RequestNext, already got one.")
         }
       }
     }
 
     private def activeNoDelay(n: Int): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) ⇒
+      Behaviors.receive { (ctx, msg) =>
         msg match {
-          case RequestNext(sendTo) ⇒
+          case RequestNext(sendTo) =>
             sendMessage(n, sendTo, ctx)
             activeNoDelay(n + 1)
         }
@@ -119,7 +119,7 @@ object ReliableDeliverySpec {
         endCondition: SomeAsyncJob => Boolean,
         endReplyTo: ActorRef[CollectedProducerIds],
         controller: ActorRef[ConsumerController.Start[TestConsumer.Job]]): Behavior[Command] =
-      Behaviors.setup { ctx ⇒
+      Behaviors.setup { ctx =>
         val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
           ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
         ctx.self ! AddConsumerController(controller)
@@ -131,7 +131,7 @@ object ReliableDeliverySpec {
         delay: FiniteDuration,
         endCondition: SomeAsyncJob => Boolean,
         endReplyTo: ActorRef[CollectedProducerIds]): Behavior[Command] =
-      Behaviors.setup { ctx ⇒
+      Behaviors.setup { ctx =>
         val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
           ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
         (new TestConsumer(delay, endCondition, endReplyTo, deliverTo)).active(Set.empty)
@@ -148,7 +148,7 @@ object ReliableDeliverySpec {
     private def active(processed: Set[(String, Long)]): Behavior[Command] = {
       Behaviors.receive { (ctx, m) =>
         m match {
-          case JobDelivery(producerId, seqNr, msg, confirmTo) ⇒
+          case JobDelivery(producerId, seqNr, msg, confirmTo) =>
             // confirmation can be later, asynchronously
             if (delay == Duration.Zero)
               ctx.self ! SomeAsyncJob(producerId, seqNr, msg, confirmTo)
@@ -157,7 +157,7 @@ object ReliableDeliverySpec {
               ctx.scheduleOnce(10.millis, ctx.self, SomeAsyncJob(producerId, seqNr, msg, confirmTo))
             Behaviors.same
 
-          case job @ SomeAsyncJob(producerId, seqNr, _, confirmTo) ⇒
+          case job @ SomeAsyncJob(producerId, seqNr, _, confirmTo) =>
             // when replacing producer the seqNr may start from 1 again
             val cleanProcessed =
               if (seqNr == 1L) processed.filterNot { case (pid, _) => pid == producerId } else processed
@@ -202,7 +202,7 @@ object ReliableDeliverySpec {
           context.messageAdapter(req => RequestNext(req.askNextTo))
         producerController ! ProducerController.Start(requestNextAdapter)
 
-        Behaviors.withTimers { timers ⇒
+        Behaviors.withTimers { timers =>
           timers.startTimerWithFixedDelay(Tick, Tick, delay)
           idle(0, replyProbe)
         }
@@ -211,8 +211,8 @@ object ReliableDeliverySpec {
 
     private def idle(n: Int, replyProbe: ActorRef[Long]): Behavior[Command] = {
       Behaviors.receiveMessage {
-        case Tick ⇒ Behaviors.same
-        case RequestNext(sendTo) ⇒ active(n + 1, replyProbe, sendTo)
+        case Tick                => Behaviors.same
+        case RequestNext(sendTo) => active(n + 1, replyProbe, sendTo)
         case Confirmed(seqNr) =>
           replyProbe ! seqNr
           Behaviors.same
@@ -223,9 +223,9 @@ object ReliableDeliverySpec {
         n: Int,
         replyProbe: ActorRef[Long],
         sendTo: ActorRef[ProducerController.MessageWithConfirmation[TestConsumer.Job]]): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) ⇒
+      Behaviors.receive { (ctx, msg) =>
         msg match {
-          case Tick ⇒
+          case Tick =>
             val msg = s"msg-$n"
             ctx.log.info("sent {}", msg)
             ctx.ask(
@@ -237,7 +237,7 @@ object ReliableDeliverySpec {
             }
             idle(n, replyProbe)
 
-          case RequestNext(_) ⇒
+          case RequestNext(_) =>
             throw new IllegalStateException("Unexpected RequestNext, already got one.")
 
           case Confirmed(seqNr) =>
@@ -268,7 +268,7 @@ object ReliableDeliverySpec {
           context.messageAdapter(req => RequestNext(req.sendNextTo))
         producerController ! WorkPullingProducerController.Start(requestNextAdapter)
 
-        Behaviors.withTimers { timers ⇒
+        Behaviors.withTimers { timers =>
           timers.startTimerWithFixedDelay(Tick, Tick, delay)
           idle(0)
         }
@@ -277,21 +277,21 @@ object ReliableDeliverySpec {
 
     private def idle(n: Int): Behavior[Command] = {
       Behaviors.receiveMessage {
-        case Tick ⇒ Behaviors.same
-        case RequestNext(sendTo) ⇒ active(n + 1, sendTo)
+        case Tick                => Behaviors.same
+        case RequestNext(sendTo) => active(n + 1, sendTo)
       }
     }
 
     private def active(n: Int, sendTo: ActorRef[TestConsumer.Job]): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) ⇒
+      Behaviors.receive { (ctx, msg) =>
         msg match {
-          case Tick ⇒
+          case Tick =>
             val msg = s"msg-$n"
             ctx.log.info("sent {}", msg)
             sendTo ! TestConsumer.Job(msg)
             idle(n)
 
-          case RequestNext(_) ⇒
+          case RequestNext(_) =>
             throw new IllegalStateException("Unexpected RequestNext, already got one.")
         }
       }
@@ -313,7 +313,7 @@ object ReliableDeliverySpec {
         producerController ! ShardingProducerController.Start(requestNextAdapter)
 
         // simulate fast producer
-        Behaviors.withTimers { timers ⇒
+        Behaviors.withTimers { timers =>
           timers.startTimerWithFixedDelay(Tick, Tick, 20.millis)
           idle(0)
         }
@@ -322,22 +322,22 @@ object ReliableDeliverySpec {
 
     private def idle(n: Int): Behavior[Command] = {
       Behaviors.receiveMessage {
-        case Tick ⇒ Behaviors.same
-        case RequestNext(sendTo) ⇒ active(n + 1, sendTo)
+        case Tick                => Behaviors.same
+        case RequestNext(sendTo) => active(n + 1, sendTo)
       }
     }
 
     private def active(n: Int, sendTo: ActorRef[ShardingEnvelope[TestConsumer.Job]]): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) ⇒
+      Behaviors.receive { (ctx, msg) =>
         msg match {
-          case Tick ⇒
+          case Tick =>
             val msg = s"msg-$n"
             val entityId = s"entity-${n % 3}"
             ctx.log.info2("sent {} to {}", msg, entityId)
             sendTo ! ShardingEnvelope(entityId, TestConsumer.Job(msg))
             idle(n)
 
-          case RequestNext(_) ⇒
+          case RequestNext(_) =>
             throw new IllegalStateException("Unexpected RequestNext, already got one.")
         }
       }

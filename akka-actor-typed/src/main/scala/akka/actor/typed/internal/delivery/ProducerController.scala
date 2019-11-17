@@ -142,9 +142,9 @@ object ProducerController {
       producer: ActorRef[RequestNext[A]],
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[InternalCommand] = {
 
-    Behaviors.setup { ctx ⇒
+    Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
-        val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg ⇒ Msg(msg))
+        val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg => Msg(msg))
         producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
         new ProducerController[A](ctx, producerId, producer, msgAdapter, timers).active(
           State(
@@ -180,8 +180,8 @@ private class ProducerController[A: ClassTag](
         ctx.log.info("sent [{}]", s.currentSeqNr)
         val seqMsg = SequencedMessage(producerId, s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr)(ctx.self)
         val newUnconfirmed = s.unconfirmed match {
-          case Some(u) ⇒ Some(u :+ seqMsg)
-          case None ⇒ None // no resending, no need to keep unconfirmed
+          case Some(u) => Some(u :+ seqMsg)
+          case None    => None // no resending, no need to keep unconfirmed
         }
         if (s.currentSeqNr == s.firstSeqNr)
           timers.startTimerWithFixedDelay(ResendFirst, ResendFirst, 1.second)
@@ -210,10 +210,10 @@ private class ProducerController[A: ClassTag](
     Behaviors.receiveMessage {
       case MessageWithConfirmation(m: A, replyTo) =>
         onMsg(m, s.pendingReplies.updated(s.currentSeqNr, replyTo))
-      case Msg(m: A) ⇒
+      case Msg(m: A) =>
         onMsg(m, s.pendingReplies)
 
-      case Request(newConfirmedSeqNr, newRequestedSeqNr, supportResend, viaTimeout) ⇒
+      case Request(newConfirmedSeqNr, newRequestedSeqNr, supportResend, viaTimeout) =>
         ctx.log.infoN(
           "request confirmed [{}], requested [{}], current [{}]",
           newConfirmedSeqNr,
@@ -239,8 +239,8 @@ private class ProducerController[A: ClassTag](
 
         val newUnconfirmed =
           if (supportResend) s.unconfirmed match {
-            case Some(u) ⇒ Some(u.dropWhile(_.seqNr <= newConfirmedSeqNr))
-            case None ⇒ Some(Vector.empty)
+            case Some(u) => Some(u.dropWhile(_.seqNr <= newConfirmedSeqNr))
+            case None    => Some(Vector.empty)
           } else None
 
         if (newConfirmedSeqNr == s.firstSeqNr)
@@ -248,7 +248,7 @@ private class ProducerController[A: ClassTag](
 
         if (viaTimeout && newUnconfirmed.nonEmpty) {
           // the last message was lost and no more message was sent that would trigger Resend
-          newUnconfirmed.foreach { u ⇒
+          newUnconfirmed.foreach { u =>
             if (u.nonEmpty)
               ctx.log.info("resending after Timeout [{} - {}]", u.head.seqNr, u.last.seqNr)
             u.foreach(s.send)
@@ -273,21 +273,21 @@ private class ProducerController[A: ClassTag](
               unconfirmed = newUnconfirmed))
         }
 
-      case Resend(fromSeqNr) ⇒
+      case Resend(fromSeqNr) =>
         s.unconfirmed match {
-          case Some(u) ⇒
+          case Some(u) =>
             val newUnconfirmed = u.dropWhile(_.seqNr < fromSeqNr)
             if (u.nonEmpty)
               ctx.log.info("resending [{} - {}]", u.head.seqNr, u.last.seqNr)
             newUnconfirmed.foreach(s.send)
             active(s.copy(unconfirmed = Some(newUnconfirmed)))
-          case None ⇒
+          case None =>
             throw new IllegalStateException("Resend not supported, run the ConsumerController with resendLost = true")
         }
 
       case ResendFirst =>
         s.unconfirmed match {
-          case Some(u) if u.nonEmpty && u.head.seqNr == s.firstSeqNr ⇒
+          case Some(u) if u.nonEmpty && u.head.seqNr == s.firstSeqNr =>
             ctx.log.info("resending first, [{}]", s.firstSeqNr)
             s.send(u.head.copy(first = true)(ctx.self))
           case _ =>

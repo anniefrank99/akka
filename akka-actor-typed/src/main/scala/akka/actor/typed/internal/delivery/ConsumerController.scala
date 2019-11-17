@@ -77,7 +77,7 @@ object ConsumerController {
 
   def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
     Behaviors
-      .setup[InternalCommand] { ctx ⇒
+      .setup[InternalCommand] { ctx =>
         Behaviors.withTimers { timers =>
           Behaviors.withStash(100) { stashBuffer =>
             def becomeActive(
@@ -179,7 +179,7 @@ private class ConsumerController[A](
   // the seqNr is right.
   private def active(s: State): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) ⇒
+      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) =>
         checkProducerId(producerId, pid, seqNr)
         val expectedSeqNr = s.receivedSeqNr + 1
         if (seqNr == expectedSeqNr || (first && seqNr >= expectedSeqNr) || (first && seqMsg.producer != s.producer)) {
@@ -205,11 +205,11 @@ private class ConsumerController[A](
           Behaviors.same
         }
 
-      case Retry ⇒
+      case Retry =>
         retryRequest(s)
         Behaviors.same
 
-      case Confirmed(seqNr) ⇒
+      case Confirmed(seqNr) =>
         context.log.warn("Unexpected confirmed [{}]", seqNr)
         Behaviors.unhandled
 
@@ -226,7 +226,7 @@ private class ConsumerController[A](
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) ⇒
+      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) =>
         checkProducerId(producerId, pid, seqNr)
 
         // FIXME is SequencedMessage.first possible here?
@@ -242,13 +242,13 @@ private class ConsumerController[A](
           Behaviors.same // ignore until we receive the expected
         }
 
-      case Retry ⇒
+      case Retry =>
         // in case the Resend message was lost
         context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
         s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
         Behaviors.same
 
-      case Confirmed(seqNr) ⇒
+      case Confirmed(seqNr) =>
         context.log.warn("Unexpected confirmed [{}]", seqNr)
         Behaviors.unhandled
 
@@ -264,7 +264,7 @@ private class ConsumerController[A](
   // the consumer. New SequencedMessage from the ProducerController will be stashed.
   private def waitingForConfirmation(s: State, first: Boolean): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case Confirmed(seqNr) ⇒
+      case Confirmed(seqNr) =>
         val expectedSeqNr = s.receivedSeqNr
         if (seqNr > expectedSeqNr) {
           throw new IllegalStateException(
@@ -296,11 +296,11 @@ private class ConsumerController[A](
         // FIXME can we use unstashOne instead of all?
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
-      case Retry ⇒
+      case Retry =>
         retryRequest(s)
         Behaviors.same
 
-      case msg ⇒
+      case msg =>
         context.log.info("Stash [{}]", msg)
         stashBuffer.stash(msg)
         Behaviors.same

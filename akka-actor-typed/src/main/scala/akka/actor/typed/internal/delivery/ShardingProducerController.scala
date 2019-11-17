@@ -48,7 +48,7 @@ object ShardingProducerController {
       .setup[InternalCommand] { context =>
         Behaviors.receiveMessagePartial {
           case start: Start[A] @unchecked =>
-            val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg ⇒ Msg(msg))
+            val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg))
             val requestNext = RequestNext(msgAdapter)
             start.producer ! requestNext
             new ShardingProducerController(context, producerId, start.producer, requestNext, region)

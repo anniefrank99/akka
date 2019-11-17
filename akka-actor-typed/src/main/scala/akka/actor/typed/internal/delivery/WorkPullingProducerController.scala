@@ -54,7 +54,7 @@ object WorkPullingProducerController {
               buffer.stash(reg)
               Behaviors.same
             case start: Start[A] @unchecked =>
-              val msgAdapter: ActorRef[A] = context.messageAdapter(msg ⇒ Msg(msg))
+              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg))
               val requestNext = RequestNext(msgAdapter)
               val b = new WorkPullingProducerController(context, producerId, start.producer, requestNext)
                 .active(State(Map.empty, 0, hasRequested = false))
