@@ -246,11 +246,15 @@ private class ProducerController[A: ClassTag](
         if (newConfirmedSeqNr == s.firstSeqNr)
           timers.cancel(ResendFirst)
 
-        if (viaTimeout && newUnconfirmed.nonEmpty) {
+        if ((viaTimeout || newConfirmedSeqNr == s.firstSeqNr) && newUnconfirmed.nonEmpty) {
           // the last message was lost and no more message was sent that would trigger Resend
           newUnconfirmed.foreach { u =>
             if (u.nonEmpty)
-              ctx.log.info("resending after Timeout [{} - {}]", u.head.seqNr, u.last.seqNr)
+              ctx.log.infoN(
+                "resending after {} [{} - {}]",
+                if (viaTimeout) "Timeout" else "first",
+                u.head.seqNr,
+                u.last.seqNr)
             u.foreach(s.send)
           }
         }
