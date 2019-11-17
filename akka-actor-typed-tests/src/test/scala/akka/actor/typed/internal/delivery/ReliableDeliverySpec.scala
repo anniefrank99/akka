@@ -428,6 +428,12 @@ class ReliableDeliverySpec
     case TestConsumer.SomeAsyncJob(_, nr, _, _) => nr == seqNr
   }
 
+  private def sequencedMessage(n: Long, producerController: ActorRef[ProducerController.Command[TestConsumer.Job]])
+      : SequencedMessage[TestConsumer.Job] = {
+    ConsumerController.SequencedMessage(s"p-$idCount", n, TestConsumer.Job(s"msg-$n"), first = n == 1)(
+      producerController.unsafeUpcast[ProducerController.InternalCommand])
+  }
+
   "ReliableDelivery" must {
 
     "illustrate point-to-point usage" in {
@@ -747,55 +753,11 @@ class ReliableDeliverySpec
 
     }
 
-    "deliver for normal scenario" in {
-      nextId()
-      val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
-      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
-
-      val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
-      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
-      producerController ! ProducerController.Start(producerProbe.ref)
-
-      consumerController ! ConsumerController.RegisterToProducerController(producerController)
-
-      // initial RequestNext
-      val sendTo = producerProbe.receiveMessage().sendNextTo
-
-      consumerController ! ConsumerController.Start(consumerProbe.ref)
-      sendTo ! TestConsumer.Job("msg-1")
-
-      val delivery1 = consumerProbe.receiveMessage()
-      delivery1.seqNr should ===(1)
-      delivery1.msg should ===(TestConsumer.Job("msg-1"))
-      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
-
-      sendTo ! TestConsumer.Job("msg-2")
-      producerProbe.receiveMessage() // RequestNext immediately
-      sendTo ! TestConsumer.Job("msg-3")
-      producerProbe.receiveMessage()
-
-      val delivery2 = consumerProbe.receiveMessage()
-      delivery2.seqNr should ===(2)
-      delivery2.msg should ===(TestConsumer.Job("msg-2"))
-      // msg-3 isn't delivered before msg-2 has been confirmed (but we could allow more in flight)
-      consumerProbe.expectNoMessage()
-      delivery2.confirmTo ! ConsumerController.Confirmed(delivery2.seqNr)
-
-      val delivery3 = consumerProbe.receiveMessage()
-      delivery3.seqNr should ===(3)
-      delivery3.msg should ===(TestConsumer.Job("msg-3"))
-      delivery3.confirmTo ! ConsumerController.Confirmed(delivery3.seqNr)
-
-      testKit.stop(producerController)
-      testKit.stop(consumerController)
-    }
   }
 
   "ProducerController" must {
 
-    "resend initial SequencedMessage if lost" in {
+    "resend lost initial SequencedMessage" in {
       nextId()
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
@@ -809,27 +771,95 @@ class ReliableDeliverySpec
       val sendTo = producerProbe.receiveMessage().sendNextTo
       sendTo ! TestConsumer.Job("msg-1")
 
-      val internalProducerController = producerController.unsafeUpcast[ProducerController.InternalCommand]
-
-      consumerControllerProbe.expectMessage(
-        ConsumerController.SequencedMessage(s"p-${idCount}", 1L, TestConsumer.Job("msg-1"), true)(
-          internalProducerController))
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController))
 
       // the ConsumerController will send initial `Request` back, but if that is lost or if the first
       // `SequencedMessage` is lost the ProducerController will resend the SequencedMessage
-      consumerControllerProbe.expectMessage(
-        ConsumerController.SequencedMessage(s"p-${idCount}", 1L, TestConsumer.Job("msg-1"), true)(
-          internalProducerController))
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController))
 
+      val internalProducerController = producerController.unsafeUpcast[ProducerController.InternalCommand]
       internalProducerController ! ProducerController.Internal.Request(1L, 10L, true, false)
       consumerControllerProbe.expectNoMessage(1100.millis)
 
       testKit.stop(producerController)
+    }
 
-      // FIXME more tests of resend first,
-      // * for supportResend=false
-      // * for registration of new ConsumerController
-      // * when replacing producer
+    "resend lost SequencedMessage" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController))
+
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      consumerControllerProbe.expectMessage(sequencedMessage(2, producerController))
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      consumerControllerProbe.expectMessage(sequencedMessage(3, producerController))
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      consumerControllerProbe.expectMessage(sequencedMessage(4, producerController))
+
+      // let's say 3 is lost
+      producerController ! ProducerController.Internal.Resend(3)
+
+      consumerControllerProbe.expectMessage(sequencedMessage(3, producerController))
+      consumerControllerProbe.expectMessage(sequencedMessage(4, producerController))
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-5")
+      consumerControllerProbe.expectMessage(sequencedMessage(5, producerController))
+
+      testKit.stop(producerController)
+    }
+
+    "support registration of new ConsumerController" in {
+      nextId()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      val consumerControllerProbe1 = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe1.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      consumerControllerProbe1.expectMessage(sequencedMessage(1, producerController))
+
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+
+      val consumerControllerProbe2 = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe2.ref)
+
+      consumerControllerProbe2.expectMessage(
+        sequencedMessage(2, producerController).copy(first = true)(producerController))
+      consumerControllerProbe2.expectNoMessage(100.millis)
+      // if no Request confirming the first (seqNr=2) it will resend it
+      consumerControllerProbe2.expectMessage(
+        sequencedMessage(2, producerController).copy(first = true)(producerController))
+
+      producerController ! ProducerController.Internal.Request(2L, 10L, true, false)
+      // then the other unconfirmed should be resent
+      // FIXME not implemented yet
+//        consumerControllerProbe2.expectMessage(sequencedMessage(3, producerController))
+//
+//      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+//      consumerControllerProbe2.expectMessage(sequencedMessage(4, producerController))
+
+      testKit.stop(producerController)
     }
 
   }
@@ -855,11 +885,7 @@ class ReliableDeliverySpec
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
-      consumerController ! ConsumerController.SequencedMessage(
-        s"p-$idCount",
-        1,
-        TestConsumer.Job("msg-1"),
-        first = true)(producerControllerProbe.ref)
+      consumerController ! sequencedMessage(1, producerControllerProbe.ref)
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -887,11 +913,7 @@ class ReliableDeliverySpec
       consumerController ! ConsumerController.Start(consumerProbe.ref)
 
       (1 until windowSize / 2).foreach { n =>
-        consumerController ! ConsumerController.SequencedMessage(
-          s"p-$idCount",
-          n,
-          TestConsumer.Job(s"msg-$n"),
-          first = n == 1)(producerControllerProbe.ref)
+        consumerController ! sequencedMessage(n, producerControllerProbe.ref)
       }
 
       producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, windowSize, true, false))
@@ -904,11 +926,8 @@ class ReliableDeliverySpec
 
       producerControllerProbe.expectNoMessage()
 
-      consumerController ! ConsumerController.SequencedMessage(
-        s"p-$idCount",
-        windowSize / 2,
-        TestConsumer.Job(s"msg-${windowSize / 2}"),
-        first = false)(producerControllerProbe.ref)
+      consumerController ! sequencedMessage(windowSize / 2, producerControllerProbe.ref)
+
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       producerControllerProbe.expectNoMessage()
       consumerController ! ConsumerController.Confirmed(windowSize / 2)
@@ -917,6 +936,46 @@ class ReliableDeliverySpec
 
       testKit.stop(consumerController)
     }
+
+    "detect lost message" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(1, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      consumerController ! sequencedMessage(2, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(2)
+
+      consumerController ! sequencedMessage(5, producerControllerProbe.ref)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Resend(3))
+
+      consumerController ! sequencedMessage(3, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(4, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(5, producerControllerProbe.ref)
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+      consumerController ! ConsumerController.Confirmed(3)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
+      consumerController ! ConsumerController.Confirmed(4)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
+      consumerController ! ConsumerController.Confirmed(5)
+
+      testKit.stop(consumerController)
+    }
   }
+
+  // FIXME more tests for supportResend=false
 
 }
