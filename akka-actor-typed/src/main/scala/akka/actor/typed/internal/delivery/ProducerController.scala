@@ -81,6 +81,7 @@ object ProducerController {
       require(confirmedSeqNr < upToSeqNr)
     }
     final case class Resend(fromSeqNr: Long) extends InternalCommand
+    final case class Ack(confirmedSeqNr: Long) extends InternalCommand
   }
 
   private case class Msg[A](msg: A) extends InternalCommand
@@ -174,11 +175,11 @@ private class ProducerController[A: ClassTag](
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
-    def onMsg(m: A, newPendingReplies: Map[Long, ActorRef[Long]]): Behavior[InternalCommand] = {
+    def onMsg(m: A, newPendingReplies: Map[Long, ActorRef[Long]], ack: Boolean): Behavior[InternalCommand] = {
       if (s.requested && s.currentSeqNr <= s.requestedSeqNr) {
         // FIXME adjust all logging, most should probably be debug
         ctx.log.info("sent [{}]", s.currentSeqNr)
-        val seqMsg = SequencedMessage(producerId, s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr)(ctx.self)
+        val seqMsg = SequencedMessage(producerId, s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr, ack)(ctx.self)
         val newUnconfirmed = s.unconfirmed match {
           case Some(u) => Some(u :+ seqMsg)
           case None    => None // no resending, no need to keep unconfirmed
@@ -207,83 +208,92 @@ private class ProducerController[A: ClassTag](
       }
     }
 
+    def onAck(newConfirmedSeqNr: Long): State[A] = {
+      // FIXME use more efficient Map for pendingReplies, sorted, maybe just `Vector[(Long, ActorRef)]`
+      val newPendingReplies =
+        if (s.pendingReplies.isEmpty)
+          s.pendingReplies
+        else {
+          val replies = s.pendingReplies.keys.filter(_ <= newConfirmedSeqNr).toVector.sorted
+          if (replies.nonEmpty)
+            ctx.log.info("Confirmation replies from [{}] to [{}]", replies.min, replies.max)
+          replies.foreach { seqNr =>
+            s.pendingReplies(seqNr) ! seqNr
+          }
+          s.pendingReplies -- replies
+        }
+
+      val newUnconfirmed =
+        s.unconfirmed match {
+          case Some(u) => Some(u.dropWhile(_.seqNr <= newConfirmedSeqNr))
+          case None    => None
+        }
+
+      if (newConfirmedSeqNr == s.firstSeqNr)
+        timers.cancel(ResendFirst)
+
+      s.copy(
+        confirmedSeqNr = math.max(s.confirmedSeqNr, newConfirmedSeqNr),
+        pendingReplies = newPendingReplies,
+        unconfirmed = newUnconfirmed)
+    }
+
+    def resendUnconfirmed(newUnconfirmed: Vector[SequencedMessage[A]]): Unit = {
+      if (newUnconfirmed.nonEmpty)
+        ctx.log.info("resending [{} - {}]", newUnconfirmed.head.seqNr, newUnconfirmed.last.seqNr)
+      newUnconfirmed.foreach(s.send)
+    }
+
     Behaviors.receiveMessage {
       case MessageWithConfirmation(m: A, replyTo) =>
-        onMsg(m, s.pendingReplies.updated(s.currentSeqNr, replyTo))
+        onMsg(m, s.pendingReplies.updated(s.currentSeqNr, replyTo), ack = true)
+
       case Msg(m: A) =>
-        onMsg(m, s.pendingReplies)
+        onMsg(m, s.pendingReplies, ack = false)
 
       case Request(newConfirmedSeqNr, newRequestedSeqNr, supportResend, viaTimeout) =>
         ctx.log.infoN(
-          "request confirmed [{}], requested [{}], current [{}]",
+          "Request, confirmed [{}], requested [{}], current [{}]",
           newConfirmedSeqNr,
           newRequestedSeqNr,
           s.currentSeqNr)
 
-        // FIXME Better to have a separate Ack message for confirmedSeqNr to be able to have
-        // more frequent Ack than Request (incr window)
-
-        // FIXME use more efficient Map for pendingReplies, sorted, maybe just `Vector[(Long, ActorRef)]`
-        val newPendingReplies =
-          if (s.pendingReplies.isEmpty)
-            s.pendingReplies
-          else {
-            val replies = s.pendingReplies.keys.filter(_ <= newConfirmedSeqNr).toVector.sorted
-            if (replies.nonEmpty)
-              ctx.log.info("Confirmation replies from [{}] to [{}]", replies.min, replies.max)
-            replies.foreach { seqNr =>
-              s.pendingReplies(seqNr) ! seqNr
-            }
-            s.pendingReplies -- replies
-          }
+        val stateAfterAck = onAck(newConfirmedSeqNr)
 
         val newUnconfirmed =
-          if (supportResend) s.unconfirmed match {
-            case Some(u) => Some(u.dropWhile(_.seqNr <= newConfirmedSeqNr))
-            case None    => Some(Vector.empty)
-          } else None
-
-        if (newConfirmedSeqNr == s.firstSeqNr)
-          timers.cancel(ResendFirst)
+          if (stateAfterAck.unconfirmed.nonEmpty == supportResend)
+            stateAfterAck.unconfirmed
+          else if (supportResend)
+            Some(Vector.empty)
+          else
+            None
 
         if ((viaTimeout || newConfirmedSeqNr == s.firstSeqNr) && newUnconfirmed.nonEmpty) {
           // the last message was lost and no more message was sent that would trigger Resend
-          newUnconfirmed.foreach { u =>
-            if (u.nonEmpty)
-              ctx.log.infoN(
-                "resending after {} [{} - {}]",
-                if (viaTimeout) "Timeout" else "first",
-                u.head.seqNr,
-                u.last.seqNr)
-            u.foreach(s.send)
-          }
+          newUnconfirmed.foreach(resendUnconfirmed)
         }
 
         if (newRequestedSeqNr > s.requestedSeqNr) {
           if (!s.requested && (newRequestedSeqNr - s.currentSeqNr) > 0)
             producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
-          active(
-            s.copy(
-              requested = true,
-              confirmedSeqNr = math.max(s.confirmedSeqNr, newConfirmedSeqNr),
-              requestedSeqNr = newRequestedSeqNr,
-              pendingReplies = newPendingReplies,
-              unconfirmed = newUnconfirmed))
+          active(stateAfterAck.copy(requested = true, requestedSeqNr = newRequestedSeqNr, unconfirmed = newUnconfirmed))
         } else {
-          active(
-            s.copy(
-              confirmedSeqNr = math.max(s.currentSeqNr, newConfirmedSeqNr),
-              pendingReplies = newPendingReplies,
-              unconfirmed = newUnconfirmed))
+          active(stateAfterAck.copy(unconfirmed = newUnconfirmed))
         }
+
+      case Ack(newConfirmedSeqNr) =>
+        ctx.log.infoN("Ack, confirmed [{}], current [{}]", newConfirmedSeqNr, s.currentSeqNr)
+        val stateAfterAck = onAck(newConfirmedSeqNr)
+        if (newConfirmedSeqNr == s.firstSeqNr && stateAfterAck.unconfirmed.nonEmpty) {
+          stateAfterAck.unconfirmed.foreach(resendUnconfirmed)
+        }
+        active(onAck(newConfirmedSeqNr))
 
       case Resend(fromSeqNr) =>
         s.unconfirmed match {
           case Some(u) =>
             val newUnconfirmed = u.dropWhile(_.seqNr < fromSeqNr)
-            if (u.nonEmpty)
-              ctx.log.info("resending [{} - {}]", u.head.seqNr, u.last.seqNr)
-            newUnconfirmed.foreach(s.send)
+            resendUnconfirmed(newUnconfirmed)
             active(s.copy(unconfirmed = Some(newUnconfirmed)))
           case None =>
             throw new IllegalStateException("Resend not supported, run the ConsumerController with resendLost = true")

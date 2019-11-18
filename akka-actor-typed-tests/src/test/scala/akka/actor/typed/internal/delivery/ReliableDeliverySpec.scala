@@ -430,7 +430,7 @@ class ReliableDeliverySpec
 
   private def sequencedMessage(n: Long, producerController: ActorRef[ProducerController.Command[TestConsumer.Job]])
       : SequencedMessage[TestConsumer.Job] = {
-    ConsumerController.SequencedMessage(s"p-$idCount", n, TestConsumer.Job(s"msg-$n"), first = n == 1)(
+    ConsumerController.SequencedMessage(s"p-$idCount", n, TestConsumer.Job(s"msg-$n"), first = n == 1, ack = false)(
       producerController.unsafeUpcast[ProducerController.InternalCommand])
   }
 

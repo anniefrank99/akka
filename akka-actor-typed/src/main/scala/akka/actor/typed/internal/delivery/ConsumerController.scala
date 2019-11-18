@@ -54,7 +54,7 @@ object ConsumerController {
 
   sealed trait InternalCommand
   sealed trait Command[+A] extends InternalCommand
-  final case class SequencedMessage[A](producerId: String, seqNr: Long, msg: A, first: Boolean)(
+  final case class SequencedMessage[A](producerId: String, seqNr: Long, msg: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerController.InternalCommand])
       extends Command[A]
@@ -173,13 +173,14 @@ private class ConsumerController[A](
 
   import ConsumerController._
   import ProducerController.Internal.Request
+  import ProducerController.Internal.Ack
   import ProducerController.Internal.Resend
 
   // Expecting a SequencedMessage from ProducerController, that will be delivered to the consumer if
   // the seqNr is right.
   private def active(s: State): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) =>
+      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first, ack) =>
         checkProducerId(producerId, pid, seqNr)
         val expectedSeqNr = s.receivedSeqNr + 1
         if (seqNr == expectedSeqNr || (first && seqNr >= expectedSeqNr) || (first && seqMsg.producer != s.producer)) {
@@ -187,7 +188,8 @@ private class ConsumerController[A](
           deliverTo ! Delivery(pid, seqNr, msg, context.self)
           waitingForConfirmation(
             s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, requestedSeqNr = s.requestedSeqNr),
-            first)
+            first,
+            ack)
         } else if (seqNr > expectedSeqNr) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           context.log.infoN("from producer [{}], missing [{}], received [{}]", pid, expectedSeqNr, seqNr)
@@ -196,7 +198,7 @@ private class ConsumerController[A](
             resending(s.copy(producer = seqMsg.producer))
           } else {
             deliverTo ! Delivery(pid, seqNr, msg, context.self)
-            waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), first)
+            waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), first, ack)
           }
         } else { // seqNr < expectedSeqNr
           context.log.infoN("from producer [{}], deduplicate [{}], expected [{}]", pid, seqNr, expectedSeqNr)
@@ -226,7 +228,7 @@ private class ConsumerController[A](
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first) =>
+      case seqMsg @ SequencedMessage(pid, seqNr, msg: A @unchecked, first, ack) =>
         checkProducerId(producerId, pid, seqNr)
 
         // FIXME is SequencedMessage.first possible here?
@@ -234,7 +236,7 @@ private class ConsumerController[A](
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           context.log.info("from producer [{}], received missing [{}]", pid, seqNr)
           deliverTo ! Delivery(pid, seqNr, msg, context.self)
-          waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), first)
+          waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), first, ack)
         } else {
           context.log.infoN("from producer [{}], ignoring [{}], waiting for [{}]", pid, seqNr, s.receivedSeqNr + 1)
           if (seqMsg.first)
@@ -262,7 +264,7 @@ private class ConsumerController[A](
 
   // The message has been delivered to the consumer and it is now waiting for Confirmed from
   // the consumer. New SequencedMessage from the ProducerController will be stashed.
-  private def waitingForConfirmation(s: State, first: Boolean): Behavior[InternalCommand] = {
+  private def waitingForConfirmation(s: State, first: Boolean, ack: Boolean): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
       case Confirmed(seqNr) =>
         val expectedSeqNr = s.receivedSeqNr
@@ -277,6 +279,7 @@ private class ConsumerController[A](
             seqNr)
         }
         context.log.info("Confirmed [{}], stashed size [{}]", seqNr, stashBuffer.size)
+
         val newRequestedSeqNr =
           if (first) {
             // confirm the first message immediately to cancel resending of first
@@ -291,8 +294,14 @@ private class ConsumerController[A](
             startRetryTimer() // reset interval since Request was just sent
             newRequestedSeqNr
           } else {
+            if (ack) {
+              context.log.info("Ack [{}]", seqNr)
+              s.producer ! Ack(confirmedSeqNr = seqNr)
+            }
+
             s.requestedSeqNr
           }
+
         // FIXME can we use unstashOne instead of all?
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
