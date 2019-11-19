@@ -945,6 +945,40 @@ class ReliableDeliverySpec
       testKit.stop(producerController)
     }
 
+    "allow restart of producer" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe1 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe1.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController))
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+
+      producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      consumerControllerProbe.expectMessage(sequencedMessage(2, producerController))
+
+      producerProbe1.receiveMessage().currentSeqNr should ===(3)
+
+      // restart producer, new Start
+      val producerProbe2 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe2.ref)
+
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      consumerControllerProbe.expectMessage(sequencedMessage(3, producerController))
+
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      consumerControllerProbe.expectMessage(sequencedMessage(4, producerController))
+
+      testKit.stop(producerController)
+    }
+
   }
 
   // FIXME move this unit test to separate file

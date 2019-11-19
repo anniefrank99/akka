@@ -95,6 +95,7 @@ object ProducerController {
       pendingReplies: Map[Long, ActorRef[Long]],
       unconfirmed: Option[Vector[ConsumerController.SequencedMessage[A]]], // FIXME use OptionVal
       firstSeqNr: Long,
+      producer: ActorRef[ProducerController.RequestNext[A]],
       send: ConsumerController.SequencedMessage[A] => Unit)
 
   def apply[A: ClassTag](producerId: String): Behavior[Command[A]] = {
@@ -147,16 +148,16 @@ object ProducerController {
       Behaviors.withTimers { timers =>
         val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg => Msg(msg))
         producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
-        new ProducerController[A](ctx, producerId, producer, msgAdapter, timers).active(
-          State(
-            requested = true,
-            currentSeqNr = 1L,
-            confirmedSeqNr = 0L,
-            requestedSeqNr = 1L,
-            pendingReplies = Map.empty,
-            unconfirmed = Some(Vector.empty),
-            firstSeqNr = 1L,
-            send))
+        new ProducerController[A](ctx, producerId, msgAdapter, timers).active(State(
+          requested = true,
+          currentSeqNr = 1L,
+          confirmedSeqNr = 0L,
+          requestedSeqNr = 1L,
+          pendingReplies = Map.empty,
+          unconfirmed = Some(Vector.empty),
+          firstSeqNr = 1L,
+          producer,
+          send))
       }
     }
   }
@@ -166,7 +167,6 @@ object ProducerController {
 private class ProducerController[A: ClassTag](
     ctx: ActorContext[ProducerController.InternalCommand],
     producerId: String,
-    producer: ActorRef[ProducerController.RequestNext[A]],
     msgAdapter: ActorRef[A],
     timers: TimerScheduler[ProducerController.InternalCommand]) {
   import ProducerController._
@@ -192,7 +192,7 @@ private class ProducerController[A: ClassTag](
           if (s.currentSeqNr == s.requestedSeqNr)
             false
           else {
-            producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, ctx.self)
+            s.producer ! RequestNext(producerId, s.currentSeqNr + 1, s.confirmedSeqNr, msgAdapter, ctx.self)
             true
           }
         active(
@@ -275,7 +275,7 @@ private class ProducerController[A: ClassTag](
 
         if (newRequestedSeqNr > s.requestedSeqNr) {
           if (!s.requested && (newRequestedSeqNr - s.currentSeqNr) > 0)
-            producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
+            s.producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
           active(stateAfterAck.copy(requested = true, requestedSeqNr = newRequestedSeqNr, unconfirmed = newUnconfirmed))
         } else {
           active(stateAfterAck.copy(unconfirmed = newUnconfirmed))
@@ -310,6 +310,12 @@ private class ProducerController[A: ClassTag](
         }
         Behaviors.same
 
+      case start: Start[A] @unchecked =>
+        ctx.log.info("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
+        if (s.requested)
+          start.producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, ctx.self)
+        active(s.copy(producer = start.producer))
+
       case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         val newFirstSeqNr =
           if (s.unconfirmed.isEmpty || s.unconfirmed.get.isEmpty) s.currentSeqNr
@@ -328,8 +334,6 @@ private class ProducerController[A: ClassTag](
     }
   }
 }
-
-// FIXME it must be possible to restart the producer, sending new Start
 
 // FIXME there should also be a durable version of this (using EventSouredBehavior) that stores the
 // unconfirmed messages before sending and stores ack event when confirmed.
