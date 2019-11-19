@@ -287,7 +287,7 @@ private class ProducerController[A: ClassTag](
         if (newConfirmedSeqNr == s.firstSeqNr && stateAfterAck.unconfirmed.nonEmpty) {
           stateAfterAck.unconfirmed.foreach(resendUnconfirmed)
         }
-        active(onAck(newConfirmedSeqNr))
+        active(stateAfterAck)
 
       case Resend(fromSeqNr) =>
         s.unconfirmed match {

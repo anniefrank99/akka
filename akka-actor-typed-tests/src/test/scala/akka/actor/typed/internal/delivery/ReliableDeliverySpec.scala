@@ -18,6 +18,7 @@ import akka.actor.typed.BehaviorInterceptor
 import akka.actor.typed.Terminated
 import akka.actor.typed.TypedActorContext
 import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
+import akka.actor.typed.internal.delivery.ProducerController.MessageWithConfirmation
 import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
@@ -428,9 +429,11 @@ class ReliableDeliverySpec
     case TestConsumer.SomeAsyncJob(_, nr, _, _) => nr == seqNr
   }
 
-  private def sequencedMessage(n: Long, producerController: ActorRef[ProducerController.Command[TestConsumer.Job]])
-      : SequencedMessage[TestConsumer.Job] = {
-    ConsumerController.SequencedMessage(s"p-$idCount", n, TestConsumer.Job(s"msg-$n"), first = n == 1, ack = false)(
+  private def sequencedMessage(
+      n: Long,
+      producerController: ActorRef[ProducerController.Command[TestConsumer.Job]],
+      ack: Boolean = false): SequencedMessage[TestConsumer.Job] = {
+    ConsumerController.SequencedMessage(s"p-$idCount", n, TestConsumer.Job(s"msg-$n"), first = n == 1, ack)(
       producerController.unsafeUpcast[ProducerController.InternalCommand])
   }
 
@@ -755,6 +758,7 @@ class ReliableDeliverySpec
 
   }
 
+  // FIXME move this unit test to separate file
   "ProducerController" must {
 
     "resend lost initial SequencedMessage" in {
@@ -899,8 +903,51 @@ class ReliableDeliverySpec
       testKit.stop(producerController)
     }
 
+    "reply to MessageWithConfirmation" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      val replyTo = createTestProbe[Long]()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController, ack = true))
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      replyTo.expectMessage(1L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(2, producerController, ack = true))
+      producerController ! ProducerController.Internal.Ack(2L)
+      replyTo.expectMessage(2L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(3, producerController, ack = true))
+      consumerControllerProbe.expectMessage(sequencedMessage(4, producerController, ack = true))
+      // Ack(3 lost, but Ack(4) triggers reply for 3 and 4
+      producerController ! ProducerController.Internal.Ack(4L)
+      replyTo.expectMessage(3L)
+      replyTo.expectMessage(4L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-5"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(5, producerController, ack = true))
+      // Ack(5) lost, but eventually a Request will trigger the reply
+      producerController ! ProducerController.Internal.Request(5L, 15L, true, false)
+      replyTo.expectMessage(5L)
+
+      testKit.stop(producerController)
+    }
+
   }
 
+  // FIXME move this unit test to separate file
   "ConsumerController" must {
     "resend RegisterConsumer" in {
       nextId()
@@ -1040,6 +1087,44 @@ class ReliableDeliverySpec
 
       consumerController ! ConsumerController.Confirmed(3)
       producerControllerProbe.expectMessage(ProducerController.Internal.Request(3, 20, true, true))
+
+      testKit.stop(consumerController)
+    }
+
+    "optionally ack messages" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(1, producerControllerProbe.ref, ack = true)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      consumerController ! sequencedMessage(2, producerControllerProbe.ref, ack = true)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(2)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(2))
+
+      consumerController ! sequencedMessage(3, producerControllerProbe.ref, ack = true)
+      consumerController ! sequencedMessage(4, producerControllerProbe.ref, ack = false)
+      consumerController ! sequencedMessage(5, producerControllerProbe.ref, ack = true)
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+      consumerController ! ConsumerController.Confirmed(3)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(3))
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
+      consumerController ! ConsumerController.Confirmed(4)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
+      consumerController ! ConsumerController.Confirmed(5)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(5))
 
       testKit.stop(consumerController)
     }
