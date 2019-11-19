@@ -1162,6 +1162,44 @@ class ReliableDeliverySpec
 
       testKit.stop(consumerController)
     }
+
+    "allow restart of ConsumerController" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe1.ref)
+
+      consumerController ! sequencedMessage(1, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      consumerController ! sequencedMessage(2, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(2)
+
+      consumerController ! sequencedMessage(3, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+
+      // restart consumer, before Confirmed(3)
+      val consumerProbe2 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe2.ref)
+
+      consumerProbe2.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+      consumerController ! ConsumerController.Confirmed(3)
+
+      consumerController ! sequencedMessage(4, producerControllerProbe.ref)
+      consumerProbe2.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
+      consumerController ! ConsumerController.Confirmed(4)
+
+      testKit.stop(consumerController)
+    }
   }
 
   // FIXME more tests for supportResend=false
