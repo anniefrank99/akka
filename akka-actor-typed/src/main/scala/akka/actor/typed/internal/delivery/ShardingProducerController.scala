@@ -116,7 +116,8 @@ class ShardingProducerController[A: ClassTag](
               val send: ConsumerController.SequencedMessage[A] => Unit = { seqMsg =>
                 region ! ShardingEnvelope(entityId, seqMsg)
               }
-              val p = context.spawn(ProducerController[A](outKey, send), entityId)
+              // FIXME support durableState
+              val p = context.spawn(ProducerController[A](outKey, durableState = None, send), entityId)
               p ! ProducerController.Start(requestNextAdapter)
               s.out.updated(outKey, OutState(p, None, Vector(msg)))
           }

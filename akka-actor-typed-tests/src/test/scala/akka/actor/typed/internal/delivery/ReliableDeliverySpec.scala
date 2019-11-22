@@ -449,7 +449,7 @@ class ReliableDeliverySpec
         name = s"destination-${idCount}")
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
       val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
@@ -473,7 +473,7 @@ class ReliableDeliverySpec
       val replyProbe = createTestProbe[Long]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
       val producer =
         spawn(
           TestProducerWithConfirmation(defaultProducerDelay, replyProbe.ref, producerController),
@@ -605,7 +605,7 @@ class ReliableDeliverySpec
         name = s"destination-${idCount}")
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
       val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
 
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
@@ -639,7 +639,7 @@ class ReliableDeliverySpec
         s"consumer1-${idCount}")
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
       val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
@@ -671,7 +671,7 @@ class ReliableDeliverySpec
         name = s"destination-${idCount}")
 
       val producerController1 =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController1-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController1-${idCount}")
       val producer1 = spawn(TestProducer(defaultProducerDelay, producerController1), name = s"producer1-${idCount}")
 
       producerController1 ! ProducerController.RegisterConsumer(consumerController)
@@ -683,8 +683,9 @@ class ReliableDeliverySpec
 
       val producerController2 =
         spawn(
-          ProducerController[TestConsumer.Job](s"p-${idCount}" // must keep the same producerId
-          ),
+          ProducerController[TestConsumer.Job](
+            s"p-${idCount}", // must keep the same producerId
+            None),
           s"producerController2-${idCount}")
       val producer2 = spawn(TestProducer(defaultProducerDelay, producerController2), name = s"producer2-${idCount}")
 
@@ -742,7 +743,7 @@ class ReliableDeliverySpec
 
       val producerController = spawn(
         Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](rnd, producerDrop))(
-          ProducerController[TestConsumer.Job](s"p-${idCount}")),
+          ProducerController[TestConsumer.Job](s"p-${idCount}", None)),
         s"producerController-${idCount}")
       val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
 
@@ -766,7 +767,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -793,7 +794,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
           .unsafeUpcast[ProducerController.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
@@ -830,7 +831,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
           .unsafeUpcast[ProducerController.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
@@ -867,7 +868,7 @@ class ReliableDeliverySpec
       nextId()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
           .unsafeUpcast[ProducerController.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
@@ -908,7 +909,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
           .unsafeUpcast[ProducerController.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
@@ -950,7 +951,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val producerController =
-        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}"), s"producerController-${idCount}")
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController-${idCount}")
           .unsafeUpcast[ProducerController.InternalCommand]
       val producerProbe1 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe1.ref)
