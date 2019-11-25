@@ -255,6 +255,41 @@ object ReliableDeliverySpec {
 
   }
 
+  object TestDurableProducerState {
+    import DurableProducerState._
+    def apply[A](delay: FiniteDuration): Behavior[Command[A]] =
+      apply(delay, State(1L, 0L, Vector.empty))
+
+    def apply[A](delay: FiniteDuration, state: State[A]): Behavior[Command[A]] = {
+      Behaviors.setup { context =>
+        new TestDurableProducerState[A](context, delay).active(state)
+      }
+    }
+
+  }
+
+  class TestDurableProducerState[A](context: ActorContext[DurableProducerState.Command[A]], delay: FiniteDuration) {
+    import DurableProducerState._
+
+    private def active(state: State[A]): Behavior[Command[A]] = {
+      Behaviors.receiveMessage {
+        case cmd: LoadState[A] @unchecked =>
+          if (delay == Duration.Zero) cmd.replyTo ! state else context.scheduleOnce(delay, cmd.replyTo, state)
+          Behaviors.same
+
+        case cmd: StoreMessageSent[A] @unchecked =>
+          val reply = StoreMessageSentAck(cmd.sent.seqNr)
+          if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
+          active(state.copy(currentSeqNr = cmd.sent.seqNr + 1, unconfirmed = state.unconfirmed :+ cmd.sent))
+
+        case cmd: StoreMessageConfirmed[A] @unchecked =>
+          val newUnconfirmed = state.unconfirmed.dropWhile(_.seqNr <= cmd.seqNr)
+          active(state.copy(confirmedSeqNr = cmd.seqNr, unconfirmed = newUnconfirmed))
+      }
+    }
+
+  }
+
   object TestProducerWorkPulling {
 
     trait Command
@@ -980,6 +1015,47 @@ class ReliableDeliverySpec
       testKit.stop(producerController)
     }
 
+  }
+
+  // FIXME move this unit test to separate file
+  "ProducerController with durable state" must {
+
+    "load initial state and resend unconfirmed" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val durable = TestDurableProducerState[TestConsumer.Job](
+        Duration.Zero,
+        DurableProducerState.State(
+          currentSeqNr = 5,
+          confirmedSeqNr = 2,
+          unconfirmed = Vector(
+            DurableProducerState.MessageSent(3, TestConsumer.Job("msg-3"), false),
+            DurableProducerState.MessageSent(4, TestConsumer.Job("msg-4"), false))))
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", Some(durable)), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      // no request to producer since it has unconfirmed to begin with
+      producerProbe.expectNoMessage()
+
+      consumerControllerProbe.expectMessage(
+        sequencedMessage(3, producerController).copy(first = true)(producerController))
+      consumerControllerProbe.expectNoMessage(50.millis)
+      producerController ! ProducerController.Internal.Request(3L, 13L, true, false)
+      consumerControllerProbe.expectMessage(sequencedMessage(4, producerController))
+
+      val sendTo = producerProbe.receiveMessage().sendNextTo
+      sendTo ! TestConsumer.Job("msg-5")
+      consumerControllerProbe.expectMessage(sequencedMessage(5, producerController))
+
+      testKit.stop(producerController)
+    }
   }
 
   // FIXME move this unit test to separate file

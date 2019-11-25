@@ -103,21 +103,22 @@ object ProducerController {
       confirmedSeqNr: Long,
       requestedSeqNr: Long,
       pendingReplies: Map[Long, ActorRef[Long]],
-      unconfirmed: Option[Vector[ConsumerController.SequencedMessage[A]]], // FIXME use OptionVal
+      supportResend: Boolean,
+      unconfirmed: Vector[ConsumerController.SequencedMessage[A]],
       firstSeqNr: Long,
       producer: ActorRef[ProducerController.RequestNext[A]],
       send: ConsumerController.SequencedMessage[A] => Unit)
 
   def apply[A: ClassTag](
       producerId: String,
-      durableState: Option[ActorRef[DurableProducerState.Command[A]]]): Behavior[Command[A]] = {
+      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
-        askLoadState(context, durableState)
-        waitingForStart[A](None, None, createInitialState(durableState.nonEmpty)) {
+        val durableRef = askLoadState(context, durableStateBehavior)
+        waitingForStart[A](None, None, createInitialState(durableRef.nonEmpty)) {
           (producer, consumerController, loadedState) =>
             val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
-            becomeActive(producerId, durableState, createState(context.self, producerId, send, producer, loadedState))
+            becomeActive(producerId, durableRef, createState(context.self, producerId, send, producer, loadedState))
         }
       }
       .narrow
@@ -129,17 +130,17 @@ object ProducerController {
    */
   def apply[A: ClassTag](
       producerId: String,
-      durableState: Option[ActorRef[DurableProducerState.Command[A]]],
+      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]],
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
-        askLoadState(context, durableState)
+        val durableRef = askLoadState(context, durableStateBehavior)
         // ConsumerController not used here
         waitingForStart[A](
           None,
           consumerController = Some(context.system.deadLetters),
-          createInitialState(durableState.nonEmpty)) { (producer, _, loadedState) =>
-          becomeActive(producerId, durableState, createState(context.self, producerId, send, producer, loadedState))
+          createInitialState(durableRef.nonEmpty)) { (producer, _, loadedState) =>
+          becomeActive(producerId, durableRef, createState(context.self, producerId, send, producer, loadedState))
         }
       }
       .narrow
@@ -147,20 +148,23 @@ object ProducerController {
 
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
-      durableState: Option[ActorRef[DurableProducerState.Command[A]]]): Unit = {
+      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]])
+      : Option[ActorRef[DurableProducerState.Command[A]]] = {
     implicit val loadTimeout: Timeout = 10.seconds // FIXME config
-    durableState.foreach { d =>
+    durableStateBehavior.map { b =>
+      val ref = context.spawn(b, "durable")
       context.ask[DurableProducerState.LoadState[A], DurableProducerState.State[A]](
-        d,
+        ref,
         askReplyTo => DurableProducerState.LoadState[A](askReplyTo)) {
         case Success(s) => LoadStateReply(s)
         case Failure(e) => throw e // FIXME error handling
       }
+      ref
     }
   }
 
   private def createInitialState[A: ClassTag](hasDurableState: Boolean) = {
-    if (hasDurableState) None else Some(DurableProducerState.State[A](1L, 0L, Vector.empty, 1L))
+    if (hasDurableState) None else Some(DurableProducerState.State[A](1L, 0L, Vector.empty))
   }
 
   private def createState[A: ClassTag](
@@ -168,16 +172,19 @@ object ProducerController {
       producerId: String,
       send: SequencedMessage[A] => Unit,
       producer: ActorRef[RequestNext[A]],
-      loadedState: DurableProducerState.State[A]) = {
+      loadedState: DurableProducerState.State[A]): State[A] = {
+    val unconfirmed = loadedState.unconfirmed.zipWithIndex.map {
+      case (u, i) => SequencedMessage[A](producerId, u.seqNr, u.msg, i == 0, u.ack)(self)
+    }
     State(
       requested = false,
       currentSeqNr = loadedState.currentSeqNr,
       confirmedSeqNr = loadedState.confirmedSeqNr,
       requestedSeqNr = 1L,
       pendingReplies = Map.empty,
-      unconfirmed =
-        Some(loadedState.unconfirmed.map(u => SequencedMessage[A](producerId, u.seqNr, u.msg, u.first, u.ack)(self))),
-      firstSeqNr = loadedState.firstSeqNr,
+      supportResend = true,
+      unconfirmed = unconfirmed,
+      firstSeqNr = if (loadedState.unconfirmed.isEmpty) 1L else loadedState.unconfirmed.head.seqNr, // FIXME what is the correct firstSeqNr when unconfirmed isEmpty?
       producer,
       send)
   }
@@ -211,15 +218,22 @@ object ProducerController {
 
   private def becomeActive[A: ClassTag](
       producerId: String,
-      durableState: Option[ActorRef[DurableProducerState.Command[A]]],
+      durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
       state: State[A]): Behavior[InternalCommand] = {
 
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
         val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg => Msg(msg))
-        state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
-        new ProducerController[A](ctx, producerId, durableState, msgAdapter, timers)
-          .active(state.copy(requested = true))
+        val requested =
+          if (state.unconfirmed.isEmpty) {
+            state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
+            true
+          } else {
+            ctx.self ! ResendFirst
+            false
+          }
+        new ProducerController[A](ctx, producerId, durableRef, msgAdapter, timers)
+          .active(state.copy(requested = requested))
       }
     }
   }
@@ -229,7 +243,7 @@ object ProducerController {
 private class ProducerController[A: ClassTag](
     ctx: ActorContext[ProducerController.InternalCommand],
     producerId: String,
-    durableState: Option[ActorRef[DurableProducerState.Command[A]]],
+    durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
     msgAdapter: ActorRef[A],
     timers: TimerScheduler[ProducerController.InternalCommand]) {
   import ProducerController._
@@ -249,10 +263,10 @@ private class ProducerController[A: ClassTag](
       // FIXME adjust all logging, most should probably be debug
       ctx.log.info("sent [{}]", s.currentSeqNr)
       val seqMsg = SequencedMessage(producerId, s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr, ack)(ctx.self)
-      val newUnconfirmed = s.unconfirmed match {
-        case Some(u) => Some(u :+ seqMsg)
-        case None    => None // no resending, no need to keep unconfirmed
-      }
+      val newUnconfirmed =
+        if (s.supportResend) s.unconfirmed :+ seqMsg
+        else Vector.empty // no resending, no need to keep unconfirmed
+
       if (s.currentSeqNr == s.firstSeqNr)
         timers.startTimerWithFixedDelay(ResendFirst, ResendFirst, 1.second)
 
@@ -281,11 +295,10 @@ private class ProducerController[A: ClassTag](
     }
 
     def storeMessageSent(m: A, ack: Boolean): Unit = {
-      val messageSent = MessageSent(s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr, ack)
+      val messageSent = MessageSent(s.currentSeqNr, m, ack)
       ctx.ask[StoreMessageSent[A], StoreMessageSentAck](
-        durableState.get,
-        askReplyTo =>
-          StoreMessageSent(MessageSent(s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr, ack), askReplyTo)) {
+        durableRef.get,
+        askReplyTo => StoreMessageSent(MessageSent(s.currentSeqNr, m, ack), askReplyTo)) {
         case Success(_) => StoreMessageSentCompleted(messageSent)
         case Failure(e) => throw e // FIXME error handling
       }
@@ -307,17 +320,15 @@ private class ProducerController[A: ClassTag](
         }
 
       val newUnconfirmed =
-        s.unconfirmed match {
-          case Some(u) => Some(u.dropWhile(_.seqNr <= newConfirmedSeqNr))
-          case None    => None
-        }
+        if (s.supportResend) s.unconfirmed.dropWhile(_.seqNr <= newConfirmedSeqNr)
+        else Vector.empty
 
       if (newConfirmedSeqNr == s.firstSeqNr)
         timers.cancel(ResendFirst)
 
       val newMaxConfirmedSeqNr = math.max(s.confirmedSeqNr, newConfirmedSeqNr)
 
-      durableState.foreach { d =>
+      durableRef.foreach { d =>
         // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
         // FIXME to reduce number of writes we could consider to only StoreMessageConfirmed for the Request messages and not for each Ack
         if (newMaxConfirmedSeqNr != s.confirmedSeqNr)
@@ -336,7 +347,7 @@ private class ProducerController[A: ClassTag](
     Behaviors.receiveMessage {
       case MessageWithConfirmation(m: A, replyTo) =>
         val newPendingReplies = s.pendingReplies.updated(s.currentSeqNr, replyTo)
-        if (durableState.isEmpty) {
+        if (durableRef.isEmpty) {
           onMsg(m, newPendingReplies, ack = true)
         } else {
           storeMessageSent(m, ack = true)
@@ -344,14 +355,14 @@ private class ProducerController[A: ClassTag](
         }
 
       case Msg(m: A) =>
-        if (durableState.isEmpty) {
+        if (durableRef.isEmpty) {
           onMsg(m, s.pendingReplies, ack = false)
         } else {
           storeMessageSent(m, ack = false)
           Behaviors.same
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _, ack)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack)) =>
         if (seqNr != s.currentSeqNr)
           throw new IllegalStateException(s"currentSeqNr [${s.currentSeqNr}] not matching stored seqNr [$seqNr]")
         onMsg(m, s.pendingReplies, ack)
@@ -366,52 +377,47 @@ private class ProducerController[A: ClassTag](
         val stateAfterAck = onAck(newConfirmedSeqNr)
 
         val newUnconfirmed =
-          if (stateAfterAck.unconfirmed.nonEmpty == supportResend)
-            stateAfterAck.unconfirmed
-          else if (supportResend)
-            Some(Vector.empty)
-          else
-            None
+          if (supportResend) stateAfterAck.unconfirmed
+          else Vector.empty
 
-        if ((viaTimeout || newConfirmedSeqNr == s.firstSeqNr) && newUnconfirmed.nonEmpty) {
+        if ((viaTimeout || newConfirmedSeqNr == s.firstSeqNr) && supportResend) {
           // the last message was lost and no more message was sent that would trigger Resend
-          newUnconfirmed.foreach(resendUnconfirmed)
+          resendUnconfirmed(newUnconfirmed)
         }
 
         if (newRequestedSeqNr > s.requestedSeqNr) {
           if (!s.requested && (newRequestedSeqNr - s.currentSeqNr) > 0)
             s.producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
-          active(stateAfterAck.copy(requested = true, requestedSeqNr = newRequestedSeqNr, unconfirmed = newUnconfirmed))
+          active(
+            stateAfterAck.copy(
+              requested = true,
+              requestedSeqNr = newRequestedSeqNr,
+              supportResend = supportResend,
+              unconfirmed = newUnconfirmed))
         } else {
-          active(stateAfterAck.copy(unconfirmed = newUnconfirmed))
+          active(stateAfterAck.copy(supportResend = supportResend, unconfirmed = newUnconfirmed))
         }
 
       case Ack(newConfirmedSeqNr) =>
         ctx.log.infoN("Ack, confirmed [{}], current [{}]", newConfirmedSeqNr, s.currentSeqNr)
         val stateAfterAck = onAck(newConfirmedSeqNr)
         if (newConfirmedSeqNr == s.firstSeqNr && stateAfterAck.unconfirmed.nonEmpty) {
-          stateAfterAck.unconfirmed.foreach(resendUnconfirmed)
+          resendUnconfirmed(stateAfterAck.unconfirmed)
         }
         active(stateAfterAck)
 
       case Resend(fromSeqNr) =>
-        s.unconfirmed match {
-          case Some(u) =>
-            val newUnconfirmed = u.dropWhile(_.seqNr < fromSeqNr)
-            resendUnconfirmed(newUnconfirmed)
-            active(s.copy(unconfirmed = Some(newUnconfirmed)))
-          case None =>
-            throw new IllegalStateException("Resend not supported, run the ConsumerController with resendLost = true")
-        }
+        val newUnconfirmed = s.unconfirmed.dropWhile(_.seqNr < fromSeqNr)
+        resendUnconfirmed(newUnconfirmed)
+        active(s.copy(unconfirmed = newUnconfirmed))
 
       case ResendFirst =>
-        s.unconfirmed match {
-          case Some(u) if u.nonEmpty && u.head.seqNr == s.firstSeqNr =>
-            ctx.log.info("resending first, [{}]", s.firstSeqNr)
-            s.send(u.head.copy(first = true)(ctx.self))
-          case _ =>
-            if (s.currentSeqNr > s.firstSeqNr)
-              timers.cancel(ResendFirst)
+        if (s.unconfirmed.nonEmpty && s.unconfirmed.head.seqNr == s.firstSeqNr) {
+          ctx.log.info("resending first, [{}]", s.firstSeqNr)
+          s.send(s.unconfirmed.head.copy(first = true)(ctx.self))
+        } else {
+          if (s.currentSeqNr > s.firstSeqNr)
+            timers.cancel(ResendFirst)
         }
         Behaviors.same
 
@@ -423,8 +429,8 @@ private class ProducerController[A: ClassTag](
 
       case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         val newFirstSeqNr =
-          if (s.unconfirmed.isEmpty || s.unconfirmed.get.isEmpty) s.currentSeqNr
-          else s.unconfirmed.map(_.head.seqNr).getOrElse(s.currentSeqNr)
+          if (s.unconfirmed.isEmpty) s.currentSeqNr
+          else s.unconfirmed.head.seqNr
         ctx.log.info(
           "Register new ConsumerController [{}], starting with seqNr [{}].",
           consumerController,

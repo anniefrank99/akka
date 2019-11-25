@@ -16,14 +16,10 @@ object DurableProducerState {
 
   final case class StoreMessageSentAck(confirmedSeqNr: Long)
 
-  final case class StoreMessageConfirmed[A](confirmedSeqNr: Long) extends Command[A]
+  final case class StoreMessageConfirmed[A](seqNr: Long) extends Command[A]
 
-  final case class State[A](
-      currentSeqNr: Long,
-      confirmedSeqNr: Long,
-      unconfirmed: Vector[MessageSent[A]],
-      firstSeqNr: Long)
+  final case class State[A](currentSeqNr: Long, confirmedSeqNr: Long, unconfirmed: Vector[MessageSent[A]])
 
-  final case class MessageSent[A](seqNr: Long, msg: A, first: Boolean, ack: Boolean)
+  final case class MessageSent[A](seqNr: Long, msg: A, ack: Boolean)
 
 }
