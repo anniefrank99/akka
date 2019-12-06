@@ -4,17 +4,21 @@
 
 package akka.actor.typed.internal.delivery
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration._
 import scala.util.Failure
 import scala.util.Random
 import scala.util.Success
 
 import akka.Done
+import akka.actor.testkit.typed.TestException
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.BehaviorInterceptor
+import akka.actor.typed.SupervisorStrategy
 import akka.actor.typed.Terminated
 import akka.actor.typed.TypedActorContext
 import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
@@ -257,35 +261,73 @@ object ReliableDeliverySpec {
 
   object TestDurableProducerState {
     import DurableProducerState._
-    def apply[A](delay: FiniteDuration): Behavior[Command[A]] =
-      apply(delay, State(1L, 0L, Vector.empty))
+    def apply[A](
+        delay: FiniteDuration,
+        stateHolder: AtomicReference[State[A]],
+        failWhen: Command[A] => Boolean): Behavior[Command[A]] = {
+      if (stateHolder.get() eq null)
+        stateHolder.set(State(1L, 0L, Vector.empty))
+
+      Behaviors
+        .supervise {
+          Behaviors.setup[Command[A]] { context =>
+            val state = stateHolder.get()
+            context.log.info("Starting with seqNr [{}], confirmedSeqNr [{}]", state.currentSeqNr, state.confirmedSeqNr)
+            new TestDurableProducerState[A](context, delay, stateHolder, failWhen).active(state)
+          }
+        }
+        .onFailure(SupervisorStrategy.restartWithBackoff(delay, delay, 0.0))
+    }
 
     def apply[A](delay: FiniteDuration, state: State[A]): Behavior[Command[A]] = {
-      Behaviors.setup { context =>
-        new TestDurableProducerState[A](context, delay).active(state)
-      }
+      apply(delay, new AtomicReference(state), _ => false)
     }
 
   }
 
-  class TestDurableProducerState[A](context: ActorContext[DurableProducerState.Command[A]], delay: FiniteDuration) {
+  class TestDurableProducerState[A](
+      context: ActorContext[DurableProducerState.Command[A]],
+      delay: FiniteDuration,
+      stateHolder: AtomicReference[DurableProducerState.State[A]],
+      failWhen: DurableProducerState.Command[A] => Boolean) {
     import DurableProducerState._
 
     private def active(state: State[A]): Behavior[Command[A]] = {
+      stateHolder.set(state)
       Behaviors.receiveMessage {
         case cmd: LoadState[A] @unchecked =>
+          maybeFail(cmd)
           if (delay == Duration.Zero) cmd.replyTo ! state else context.scheduleOnce(delay, cmd.replyTo, state)
           Behaviors.same
 
         case cmd: StoreMessageSent[A] @unchecked =>
-          val reply = StoreMessageSentAck(cmd.sent.seqNr)
-          if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
-          active(state.copy(currentSeqNr = cmd.sent.seqNr + 1, unconfirmed = state.unconfirmed :+ cmd.sent))
+          if (cmd.sent.seqNr == state.currentSeqNr) {
+            maybeFail(cmd)
+            val reply = StoreMessageSentAck(cmd.sent.seqNr)
+            if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
+            active(state.copy(currentSeqNr = cmd.sent.seqNr + 1, unconfirmed = state.unconfirmed :+ cmd.sent))
+          } else if (cmd.sent.seqNr == state.currentSeqNr - 1) {
+            // already stored, could be a retry after timout
+            context.log.info("Duplicate seqNr [{}], currentSeqNr [{}]", cmd.sent.seqNr, state.currentSeqNr)
+            val reply = StoreMessageSentAck(cmd.sent.seqNr)
+            if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
+            Behaviors.same
+          } else {
+            // may happen after failure
+            context.log.info("Ignoring unexpected seqNr [{}], currentSeqNr [{}]", cmd.sent.seqNr, state.currentSeqNr)
+            Behaviors.unhandled // no reply, request will timeout
+          }
 
         case cmd: StoreMessageConfirmed[A] @unchecked =>
+          maybeFail(cmd)
           val newUnconfirmed = state.unconfirmed.dropWhile(_.seqNr <= cmd.seqNr)
           active(state.copy(confirmedSeqNr = cmd.seqNr, unconfirmed = newUnconfirmed))
       }
+    }
+
+    private def maybeFail(cmd: Command[A]): Unit = {
+      if (failWhen(cmd))
+        throw TestException(s"TestDurableProducerState failed at [$cmd]")
     }
 
   }
@@ -781,6 +823,49 @@ class ReliableDeliverySpec
           ProducerController[TestConsumer.Job](s"p-${idCount}", None)),
         s"producerController-${idCount}")
       val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
+
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
+
+      consumerEndProbe.receiveMessage(120.seconds)
+
+      testKit.stop(producer)
+      testKit.stop(producerController)
+      testKit.stop(consumerController)
+
+    }
+
+    "work with flaky DurableProducerState" in {
+      nextId()
+
+      val rndSeed = System.currentTimeMillis()
+      val rnd = new Random(rndSeed)
+      val durableFailProbability = 0.1 + rnd.nextDouble() * 0.2
+      val durableDelay = rnd.nextInt(40).millis
+      system.log.infoN(
+        "Random seed [{}], durableFailProbability [{}], durableDelay [{}]",
+        rndSeed,
+        durableFailProbability,
+        durableDelay)
+
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+      spawn(
+        TestConsumer(defaultConsumerDelay, consumerEndCondition(31), consumerEndProbe.ref, consumerController),
+        name = s"destination-${idCount}")
+
+      val stateHolder = new AtomicReference[DurableProducerState.State[TestConsumer.Job]]
+      val durableProducerState =
+        TestDurableProducerState(
+          durableDelay,
+          stateHolder,
+          (_: DurableProducerState.Command[TestConsumer.Job]) => rnd.nextDouble() < durableFailProbability)
+
+      val producerController =
+        spawn(
+          ProducerController[TestConsumer.Job](s"p-${idCount}", Some(durableProducerState)),
+          s"producerController-${idCount}")
+      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
 
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
 
