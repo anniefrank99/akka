@@ -122,6 +122,7 @@ object ProducerController {
       durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
+        context.setLoggerName(classOf[ProducerController[_]])
         val durableRef = askLoadState(context, durableStateBehavior)
         waitingForStart[A](context, None, None, durableRef, createInitialState(durableRef.nonEmpty)) {
           (producer, consumerController, loadedState) =>
@@ -142,6 +143,7 @@ object ProducerController {
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
+        context.setLoggerName(classOf[ProducerController[_]])
         val durableRef = askLoadState(context, durableStateBehavior)
         // ConsumerController not used here
         waitingForStart[A](

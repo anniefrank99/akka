@@ -82,6 +82,7 @@ object ConsumerController {
   def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { ctx =>
+        ctx.setLoggerName(classOf[ConsumerController[_]])
         Behaviors.withTimers { timers =>
           Behaviors.withStash(100) { stashBuffer =>
             def becomeActive(

@@ -48,6 +48,7 @@ object WorkPullingProducerController {
   def apply[A: ClassTag](producerId: String): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
+        context.setLoggerName(classOf[WorkPullingProducerController[_]])
         Behaviors.withStash[InternalCommand](Int.MaxValue) { buffer =>
           Behaviors.receiveMessagePartial {
             case reg: RegisterWorker[A] @unchecked =>

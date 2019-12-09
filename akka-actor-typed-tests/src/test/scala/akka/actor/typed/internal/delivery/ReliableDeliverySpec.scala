@@ -45,6 +45,7 @@ object ReliableDeliverySpec {
         delay: FiniteDuration,
         producerController: ActorRef[ProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
       Behaviors.setup { context =>
+        context.setLoggerName("TestProducer")
         val requestNextAdapter: ActorRef[ProducerController.RequestNext[TestConsumer.Job]] =
           context.messageAdapter(req => RequestNext(req.sendNextTo))
         producerController ! ProducerController.Start(requestNextAdapter)
@@ -146,6 +147,8 @@ object ReliableDeliverySpec {
       endReplyTo: ActorRef[TestConsumer.CollectedProducerIds]) {
     import TestConsumer._
 
+    ctx.setLoggerName("TestConsumer")
+
     private val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
       ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
 
@@ -202,6 +205,7 @@ object ReliableDeliverySpec {
         replyProbe: ActorRef[Long],
         producerController: ActorRef[ProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
       Behaviors.setup { context =>
+        context.setLoggerName("TestProducerWithConfirmation")
         val requestNextAdapter: ActorRef[ProducerController.RequestNext[TestConsumer.Job]] =
           context.messageAdapter(req => RequestNext(req.askNextTo))
         producerController ! ProducerController.Start(requestNextAdapter)
@@ -270,6 +274,7 @@ object ReliableDeliverySpec {
       Behaviors
         .supervise {
           Behaviors.setup[Command[A]] { context =>
+            context.setLoggerName("TestDurableProducerState")
             val state = stateHolder.get()
             context.log.info("Starting with seqNr [{}], confirmedSeqNr [{}]", state.currentSeqNr, state.confirmedSeqNr)
             new TestDurableProducerState[A](context, delay, stateHolder, failWhen).active(state)
@@ -341,6 +346,7 @@ object ReliableDeliverySpec {
         delay: FiniteDuration,
         producerController: ActorRef[WorkPullingProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
       Behaviors.setup { context =>
+        context.setLoggerName("TestProducerWorkPulling")
         val requestNextAdapter: ActorRef[WorkPullingProducerController.RequestNext[TestConsumer.Job]] =
           context.messageAdapter(req => RequestNext(req.sendNextTo))
         producerController ! WorkPullingProducerController.Start(requestNextAdapter)
@@ -385,6 +391,7 @@ object ReliableDeliverySpec {
 
     def apply(producerController: ActorRef[ShardingProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
       Behaviors.setup { context =>
+        context.setLoggerName("TestShardingProducer")
         val requestNextAdapter: ActorRef[ShardingProducerController.RequestNext[TestConsumer.Job]] =
           context.messageAdapter(req => RequestNext(req.sendNextTo))
         producerController ! ShardingProducerController.Start(requestNextAdapter)
@@ -430,6 +437,7 @@ object ReliableDeliverySpec {
         endReplyTo: ActorRef[TestConsumer.CollectedProducerIds])
         : Behavior[ConsumerController.SequencedMessage[TestConsumer.Job]] = {
       Behaviors.setup { context =>
+        context.setLoggerName("TestShardingConsumer")
         val consumer = context.spawn(TestConsumer(delay, endCondition, endReplyTo), name = "consumer")
         // if consumer terminates this actor will also terminate
         context.watch(consumer)

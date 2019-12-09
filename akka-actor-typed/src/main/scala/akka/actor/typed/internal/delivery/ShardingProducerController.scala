@@ -46,6 +46,7 @@ object ShardingProducerController {
       region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]]): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
+        context.setLoggerName(classOf[ShardingProducerController[_]])
         Behaviors.receiveMessagePartial {
           case start: Start[A] @unchecked =>
             val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg))
