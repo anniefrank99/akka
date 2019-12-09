@@ -44,6 +44,9 @@ import akka.annotation.InternalApi
  * More messages from the producer that arrive while waiting for the confirmation are stashed by
  * the `ConsumerController` and delivered when previous message was confirmed.
  *
+ * In other words, the "request" protocol to the application producer and consumer is one-by-one, but
+ * between the `ProducerController` and `ConsumerController` it's window of messages in flight.
+ *
  * The consumer and the `ConsumerController` are supposed to be local so that these messages are fast and not lost.
  *
  * If the `ConsumerController` receives a message with unexpected sequence number (not previous + 1)

@@ -6,6 +6,7 @@ package akka.actor.typed.internal.delivery
 
 import akka.actor.typed.ActorRef
 
+// Implement with EventSourceBehavior in akka-persistence-typed
 object DurableProducerState {
 
   sealed trait Command[A]

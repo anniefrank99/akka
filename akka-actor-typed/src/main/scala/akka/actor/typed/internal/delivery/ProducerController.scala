@@ -23,7 +23,8 @@ import akka.util.Timeout
 /**
  * The producer will start the flow by sending a [[ProducerController.Start]] message to the `ProducerController` with
  * message adapter reference to convert [[ProducerController.RequestNext]] message.
- * The sends `RequestNext` to the producer, which is then allowed to send one message to the `ProducerController`.
+ * The `ProducerController` sends `RequestNext` to the producer, which is then allowed to send one message to
+ * the `ProducerController`.
  *
  * The producer and `ProducerController` are supposed to be local so that these messages are fast and not lost.
  *
@@ -33,7 +34,8 @@ import akka.util.Timeout
  * also a way to connect the ProducerController and ConsumerController in a dynamic way, for
  * example when the ProducerController is replaced.
  *
- * When the first message is received by the `ConsumerController` it sends back the initial `Request`.
+ * When the first message is received by the `ConsumerController` it sends back the initial `Request`,
+ * with demand of how many messages it can accept.
  *
  * Apart from the first message the `ProducerController` will not send more messages than requested
  * by the `ConsumerController`.
@@ -43,6 +45,9 @@ import akka.util.Timeout
  *
  * Each message is wrapped by the `ProducerController` in [[ConsumerController.SequencedMessage]] with
  * a monotonically increasing sequence number without gaps, starting at 1.
+ *
+ * In other words, the "request" protocol to the application producer and consumer is one-by-one, but
+ * between the `ProducerController` and `ConsumerController` it's window of messages in flight.
  *
  * The `Request` message also contains a `confirmedSeqNr` that is the acknowledgement
  * from the consumer that it has received and processed all messages up to that sequence number.
@@ -70,6 +75,10 @@ object ProducerController {
       confirmedSeqNr: Long,
       sendNextTo: ActorRef[A],
       askNextTo: ActorRef[MessageWithConfirmation[A]])
+
+  // FIXME when using DurableProducerState it might also be useful to have the confirmation reply
+  //       for `askNextTo` after storage instead of after complete processing. Maybe that should
+  //       always be the case
 
   final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
 
@@ -472,6 +481,3 @@ private class ProducerController[A: ClassTag](
     }
   }
 }
-
-// FIXME there should also be a durable version of this (using EventSouredBehavior) that stores the
-// unconfirmed messages before sending and stores ack event when confirmed.
