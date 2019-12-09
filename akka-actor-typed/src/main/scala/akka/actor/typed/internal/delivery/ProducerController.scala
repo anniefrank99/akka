@@ -105,7 +105,7 @@ object ProducerController {
       currentSeqNr: Long,
       confirmedSeqNr: Long,
       requestedSeqNr: Long,
-      pendingReplies: Map[Long, ActorRef[Long]],
+      pendingReplies: Vector[(Long, ActorRef[Long])],
       supportResend: Boolean,
       unconfirmed: Vector[ConsumerController.SequencedMessage[A]],
       firstSeqNr: Long,
@@ -197,7 +197,7 @@ object ProducerController {
       currentSeqNr = loadedState.currentSeqNr,
       confirmedSeqNr = loadedState.confirmedSeqNr,
       requestedSeqNr = 1L,
-      pendingReplies = Map.empty,
+      pendingReplies = Vector.empty,
       supportResend = true,
       unconfirmed = unconfirmed,
       firstSeqNr = loadedState.confirmedSeqNr + 1,
@@ -285,7 +285,7 @@ private class ProducerController[A: ClassTag](
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
-    def onMsg(m: A, newPendingReplies: Map[Long, ActorRef[Long]], ack: Boolean): Behavior[InternalCommand] = {
+    def onMsg(m: A, newPendingReplies: Vector[(Long, ActorRef[Long])], ack: Boolean): Behavior[InternalCommand] = {
       checkOnMsgRequestedState()
       // FIXME adjust all logging, most should probably be debug
       ctx.log.info("sent [{}]", s.currentSeqNr)
@@ -331,19 +331,13 @@ private class ProducerController[A: ClassTag](
     }
 
     def onAck(newConfirmedSeqNr: Long): State[A] = {
-      // FIXME use more efficient Map for pendingReplies, sorted, maybe just `Vector[(Long, ActorRef)]`
-      val newPendingReplies =
-        if (s.pendingReplies.isEmpty)
-          s.pendingReplies
-        else {
-          val replies = s.pendingReplies.keys.filter(_ <= newConfirmedSeqNr).toVector.sorted
-          if (replies.nonEmpty)
-            ctx.log.info("Confirmation replies from [{}] to [{}]", replies.min, replies.max)
-          replies.foreach { seqNr =>
-            s.pendingReplies(seqNr) ! seqNr
-          }
-          s.pendingReplies -- replies
-        }
+      val (replies, newPendingReplies) = s.pendingReplies.partition { case (seqNr, _) => seqNr <= newConfirmedSeqNr }
+
+      if (replies.nonEmpty)
+        ctx.log.info("Confirmation replies from [{}] to [{}]", replies.head._1, replies.last._1)
+      replies.foreach {
+        case (seqNr, replyTo) => replyTo ! seqNr
+      }
 
       val newUnconfirmed =
         if (s.supportResend) s.unconfirmed.dropWhile(_.seqNr <= newConfirmedSeqNr)
@@ -372,7 +366,7 @@ private class ProducerController[A: ClassTag](
 
     Behaviors.receiveMessage {
       case MessageWithConfirmation(m: A, replyTo) =>
-        val newPendingReplies = s.pendingReplies.updated(s.currentSeqNr, replyTo)
+        val newPendingReplies = s.pendingReplies :+ s.currentSeqNr -> replyTo
         if (durableRef.isEmpty) {
           onMsg(m, newPendingReplies, ack = true)
         } else {
