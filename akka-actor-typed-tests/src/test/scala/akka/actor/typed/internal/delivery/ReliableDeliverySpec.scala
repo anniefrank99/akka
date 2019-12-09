@@ -100,7 +100,7 @@ object ReliableDeliverySpec {
   object TestConsumer {
 
     final case class Job(payload: String)
-    trait Command
+    sealed trait Command
     private final case class JobDelivery(
         producerId: String,
         seqNr: Long,
@@ -124,11 +124,9 @@ object ReliableDeliverySpec {
         endCondition: SomeAsyncJob => Boolean,
         endReplyTo: ActorRef[CollectedProducerIds],
         controller: ActorRef[ConsumerController.Start[TestConsumer.Job]]): Behavior[Command] =
-      Behaviors.setup { ctx =>
-        val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
-          ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
+      Behaviors.setup[Command] { ctx =>
         ctx.self ! AddConsumerController(controller)
-        (new TestConsumer(delay, endCondition, endReplyTo, deliverTo)).active(Set.empty)
+        new TestConsumer(ctx, delay, endCondition, endReplyTo).active(Set.empty)
       }
 
     // dynamically adding ConsumerController via message AddConsumerController
@@ -136,19 +134,20 @@ object ReliableDeliverySpec {
         delay: FiniteDuration,
         endCondition: SomeAsyncJob => Boolean,
         endReplyTo: ActorRef[CollectedProducerIds]): Behavior[Command] =
-      Behaviors.setup { ctx =>
-        val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
-          ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
-        (new TestConsumer(delay, endCondition, endReplyTo, deliverTo)).active(Set.empty)
+      Behaviors.setup[Command] { ctx =>
+        new TestConsumer(ctx, delay, endCondition, endReplyTo).active(Set.empty)
       }
   }
 
   class TestConsumer(
+      ctx: ActorContext[TestConsumer.Command],
       delay: FiniteDuration,
       endCondition: TestConsumer.SomeAsyncJob => Boolean,
-      endReplyTo: ActorRef[TestConsumer.CollectedProducerIds],
-      deliverTo: ActorRef[ConsumerController.Delivery[TestConsumer.Job]]) {
+      endReplyTo: ActorRef[TestConsumer.CollectedProducerIds]) {
     import TestConsumer._
+
+    private val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
+      ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
 
     private def active(processed: Set[(String, Long)]): Behavior[Command] = {
       Behaviors.receive { (ctx, m) =>
