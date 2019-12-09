@@ -1141,6 +1141,35 @@ class ReliableDeliverySpec
 
       testKit.stop(producerController)
     }
+
+    "reply to MessageWithConfirmation after storage" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val durable =
+        TestDurableProducerState[TestConsumer.Job](Duration.Zero, DurableProducerState.State.empty[TestConsumer.Job])
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", Some(durable)), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      val replyTo = createTestProbe[Long]()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyTo.ref)
+      replyTo.expectMessage(1L)
+
+      consumerControllerProbe.expectMessage(sequencedMessage(1, producerController, ack = true))
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
+      replyTo.expectMessage(2L)
+
+      testKit.stop(producerController)
+    }
   }
 
   // FIXME move this unit test to separate file

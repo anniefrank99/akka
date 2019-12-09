@@ -19,6 +19,9 @@ object DurableProducerState {
 
   final case class StoreMessageConfirmed[A](seqNr: Long) extends Command[A]
 
+  object State {
+    def empty[A]: State[A] = State(1L, 0L, Vector.empty)
+  }
   final case class State[A](currentSeqNr: Long, confirmedSeqNr: Long, unconfirmed: Vector[MessageSent[A]])
 
   final case class MessageSent[A](seqNr: Long, msg: A, ack: Boolean)

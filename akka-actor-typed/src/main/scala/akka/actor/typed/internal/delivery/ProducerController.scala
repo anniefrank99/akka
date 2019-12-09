@@ -76,10 +76,6 @@ object ProducerController {
       sendNextTo: ActorRef[A],
       askNextTo: ActorRef[MessageWithConfirmation[A]])
 
-  // FIXME when using DurableProducerState it might also be useful to have the confirmation reply
-  //       for `askNextTo` after storage instead of after complete processing. Maybe that should
-  //       always be the case
-
   final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
 
   /**
@@ -189,7 +185,7 @@ object ProducerController {
   }
 
   private def createInitialState[A: ClassTag](hasDurableState: Boolean) = {
-    if (hasDurableState) None else Some(DurableProducerState.State[A](1L, 0L, Vector.empty))
+    if (hasDurableState) None else Some(DurableProducerState.State.empty[A])
   }
 
   private def createState[A: ClassTag](
@@ -341,7 +337,6 @@ private class ProducerController[A: ClassTag](
 
     def onAck(newConfirmedSeqNr: Long): State[A] = {
       val (replies, newPendingReplies) = s.pendingReplies.partition { case (seqNr, _) => seqNr <= newConfirmedSeqNr }
-
       if (replies.nonEmpty)
         ctx.log.info("Confirmation replies from [{}] to [{}]", replies.head._1, replies.last._1)
       replies.foreach {
@@ -394,7 +389,20 @@ private class ProducerController[A: ClassTag](
       case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack)) =>
         if (seqNr != s.currentSeqNr)
           throw new IllegalStateException(s"currentSeqNr [${s.currentSeqNr}] not matching stored seqNr [$seqNr]")
-        onMsg(m, s.pendingReplies, ack)
+
+        val newPendingReplies =
+          if (s.pendingReplies.isEmpty) {
+            s.pendingReplies
+          } else {
+            val (headSeqNr, replyTo) = s.pendingReplies.head
+            if (headSeqNr != seqNr)
+              throw new IllegalStateException(s"Unexpected pending reply [$headSeqNr] after storage of [$seqNr].")
+            ctx.log.info("Confirmation reply to [{}]", seqNr)
+            replyTo ! seqNr
+            s.pendingReplies.tail
+          }
+
+        onMsg(m, newPendingReplies, ack)
 
       case f: StoreMessageSentFailed[A] @unchecked =>
         // FIXME attempt counter, and give up
