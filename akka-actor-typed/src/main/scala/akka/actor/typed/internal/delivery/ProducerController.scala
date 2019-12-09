@@ -200,7 +200,7 @@ object ProducerController {
       pendingReplies = Map.empty,
       supportResend = true,
       unconfirmed = unconfirmed,
-      firstSeqNr = if (loadedState.unconfirmed.isEmpty) 1L else loadedState.unconfirmed.head.seqNr, // FIXME what is the correct firstSeqNr when unconfirmed isEmpty?
+      firstSeqNr = loadedState.confirmedSeqNr + 1,
       producer,
       send)
   }
