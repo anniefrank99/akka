@@ -113,7 +113,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
 
-      // let's say 3 and 4 are lost, and new more messages are sent from producer
+      // let's say 3 and 4 are lost, and no more messages are sent from producer
       // ConsumerController will resend Request periodically
       producerController ! ProducerController.Internal.Request(2L, 10L, true, true)
 
@@ -244,6 +244,86 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
 
   }
 
-  // FIXME more tests for supportResend=false
+  "ProducerController without resends" must {
+    "not resend last lost SequencedMessage when receiving Request" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
+
+      producerController ! ProducerController.Internal.Request(1L, 10L, supportResend = false, false)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController))
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController))
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
+
+      // let's say 3 and 4 are lost, and no more messages are sent from producer
+      // ConsumerController will resend Request periodically
+      producerController ! ProducerController.Internal.Request(2L, 10L, supportResend = false, true)
+
+      // but 3 and 4 are not resent because supportResend = false
+      consumerControllerProbe.expectNoMessage()
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-5")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 5, producerController))
+
+      testKit.stop(producerController)
+    }
+
+    "reply to MessageWithConfirmation for lost messages" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      val replyTo = createTestProbe[Long]()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController, ack = true))
+      producerController ! ProducerController.Internal.Request(1L, 10L, supportResend = false, false)
+      replyTo.expectMessage(1L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController, ack = true))
+      producerController ! ProducerController.Internal.Ack(2L)
+      replyTo.expectMessage(2L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController, ack = true))
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController, ack = true))
+      // Ack(3 lost, but Ack(4) triggers reply for 3 and 4
+      producerController ! ProducerController.Internal.Ack(4L)
+      replyTo.expectMessage(3L)
+      replyTo.expectMessage(4L)
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-5"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 5, producerController, ack = true))
+      // Ack(5) lost, but eventually a Request will trigger the reply
+      producerController ! ProducerController.Internal.Request(5L, 15L, supportResend = false, false)
+      replyTo.expectMessage(5L)
+
+      testKit.stop(producerController)
+    }
+  }
 
 }

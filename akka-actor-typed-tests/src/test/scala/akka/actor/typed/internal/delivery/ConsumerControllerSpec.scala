@@ -239,6 +239,39 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
     }
   }
 
-  // FIXME more tests for supportResend=false
+  "ConsumerController without resending" must {
+    "accept lost message" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = false), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, supportResend = false, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, supportResend = false, false))
+
+      // skipping 2
+      consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
+      consumerController ! ConsumerController.Confirmed(4)
+
+      // skip many
+      consumerController ! sequencedMessage(producerId, 35, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(35)
+      consumerController ! ConsumerController.Confirmed(35)
+
+      testKit.stop(consumerController)
+    }
+  }
 
 }
