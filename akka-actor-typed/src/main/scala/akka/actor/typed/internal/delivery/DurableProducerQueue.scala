@@ -7,7 +7,8 @@ package akka.actor.typed.internal.delivery
 import akka.actor.typed.ActorRef
 
 // Implement with EventSourceBehavior in akka-persistence-typed
-object DurableProducerState {
+// FIXME how much of this should be public? Should it be possible to plug-in different implementation?
+object DurableProducerQueue {
 
   sealed trait Command[A]
 

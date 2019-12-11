@@ -96,13 +96,13 @@ object ProducerController {
   private case class Msg[A](msg: A) extends InternalCommand
   private case object ResendFirst extends InternalCommand
 
-  private case class LoadStateReply[A](state: DurableProducerState.State[A]) extends InternalCommand
+  private case class LoadStateReply[A](state: DurableProducerQueue.State[A]) extends InternalCommand
   private case class LoadStateFailed(attempt: Int) extends InternalCommand
-  private case class StoreMessageSentReply(ack: DurableProducerState.StoreMessageSentAck)
-  private case class StoreMessageSentFailed[A](messageSent: DurableProducerState.MessageSent[A], attempt: Int)
+  private case class StoreMessageSentReply(ack: DurableProducerQueue.StoreMessageSentAck)
+  private case class StoreMessageSentFailed[A](messageSent: DurableProducerQueue.MessageSent[A], attempt: Int)
       extends InternalCommand
 
-  private case class StoreMessageSentCompleted[A](messageSent: DurableProducerState.MessageSent[A])
+  private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
       extends InternalCommand
 
   private final case class State[A](
@@ -119,15 +119,15 @@ object ProducerController {
 
   def apply[A: ClassTag](
       producerId: String,
-      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]]): Behavior[Command[A]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
         context.setLoggerName(classOf[ProducerController[_]])
-        val durableRef = askLoadState(context, durableStateBehavior)
-        waitingForStart[A](context, None, None, durableRef, createInitialState(durableRef.nonEmpty)) {
+        val durableQueue = askLoadState(context, durableQueueBehavior)
+        waitingForStart[A](context, None, None, durableQueue, createInitialState(durableQueue.nonEmpty)) {
           (producer, consumerController, loadedState) =>
             val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
-            becomeActive(producerId, durableRef, createState(context.self, producerId, send, producer, loadedState))
+            becomeActive(producerId, durableQueue, createState(context.self, producerId, send, producer, loadedState))
         }
       }
       .narrow
@@ -139,20 +139,20 @@ object ProducerController {
    */
   def apply[A: ClassTag](
       producerId: String,
-      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]],
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
         context.setLoggerName(classOf[ProducerController[_]])
-        val durableRef = askLoadState(context, durableStateBehavior)
+        val durableQueue = askLoadState(context, durableQueueBehavior)
         // ConsumerController not used here
         waitingForStart[A](
           context,
           None,
           consumerController = Some(context.system.deadLetters),
-          durableRef,
-          createInitialState(durableRef.nonEmpty)) { (producer, _, loadedState) =>
-          becomeActive(producerId, durableRef, createState(context.self, producerId, send, producer, loadedState))
+          durableQueue,
+          createInitialState(durableQueue.nonEmpty)) { (producer, _, loadedState) =>
+          becomeActive(producerId, durableQueue, createState(context.self, producerId, send, producer, loadedState))
         }
       }
       .narrow
@@ -160,10 +160,10 @@ object ProducerController {
 
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
-      durableStateBehavior: Option[Behavior[DurableProducerState.Command[A]]])
-      : Option[ActorRef[DurableProducerState.Command[A]]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]])
+      : Option[ActorRef[DurableProducerQueue.Command[A]]] = {
 
-    durableStateBehavior.map { b =>
+    durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
       context.watch(ref) // FIXME handle terminated, but it's supposed to be restarted so death pact is alright
       askLoadState(context, Some(ref), attempt = 1)
@@ -173,21 +173,21 @@ object ProducerController {
 
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
-      durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
       attempt: Int): Unit = {
     implicit val loadTimeout: Timeout = 3.seconds // FIXME config
-    durableRef.foreach { ref =>
-      context.ask[DurableProducerState.LoadState[A], DurableProducerState.State[A]](
+    durableQueue.foreach { ref =>
+      context.ask[DurableProducerQueue.LoadState[A], DurableProducerQueue.State[A]](
         ref,
-        askReplyTo => DurableProducerState.LoadState[A](askReplyTo)) {
+        askReplyTo => DurableProducerQueue.LoadState[A](askReplyTo)) {
         case Success(s) => LoadStateReply(s)
         case Failure(_) => LoadStateFailed(attempt) // timeout
       }
     }
   }
 
-  private def createInitialState[A: ClassTag](hasDurableState: Boolean) = {
-    if (hasDurableState) None else Some(DurableProducerState.State.empty[A])
+  private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
+    if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[A])
   }
 
   private def createState[A: ClassTag](
@@ -195,7 +195,7 @@ object ProducerController {
       producerId: String,
       send: SequencedMessage[A] => Unit,
       producer: ActorRef[RequestNext[A]],
-      loadedState: DurableProducerState.State[A]): State[A] = {
+      loadedState: DurableProducerQueue.State[A]): State[A] = {
     val unconfirmed = loadedState.unconfirmed.zipWithIndex.map {
       case (u, i) => SequencedMessage[A](producerId, u.seqNr, u.msg, i == 0, u.ack)(self)
     }
@@ -216,43 +216,43 @@ object ProducerController {
       context: ActorContext[InternalCommand],
       producer: Option[ActorRef[RequestNext[A]]],
       consumerController: Option[ActorRef[ConsumerController.Command[A]]],
-      durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
-      initialState: Option[DurableProducerState.State[A]])(
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      initialState: Option[DurableProducerQueue.State[A]])(
       thenBecomeActive: (
           ActorRef[RequestNext[A]],
           ActorRef[ConsumerController.Command[A]],
-          DurableProducerState.State[A]) => Behavior[InternalCommand]): Behavior[InternalCommand] = {
+          DurableProducerQueue.State[A]) => Behavior[InternalCommand]): Behavior[InternalCommand] = {
     Behaviors.receiveMessagePartial[InternalCommand] {
       case RegisterConsumer(c: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         (producer, initialState) match {
           case (Some(p), Some(s)) => thenBecomeActive(p, c, s)
-          case (_, _)             => waitingForStart(context, producer, Some(c), durableRef, initialState)(thenBecomeActive)
+          case (_, _)             => waitingForStart(context, producer, Some(c), durableQueue, initialState)(thenBecomeActive)
         }
       case start: Start[A] @unchecked =>
         (consumerController, initialState) match {
           case (Some(c), Some(s)) => thenBecomeActive(start.producer, c, s)
           case (_, _) =>
-            waitingForStart(context, Some(start.producer), consumerController, durableRef, initialState)(
+            waitingForStart(context, Some(start.producer), consumerController, durableQueue, initialState)(
               thenBecomeActive)
         }
       case load: LoadStateReply[A] @unchecked =>
         (producer, consumerController) match {
           case (Some(p), Some(c)) => thenBecomeActive(p, c, load.state)
           case (_, _) =>
-            waitingForStart(context, producer, consumerController, durableRef, Some(load.state))(thenBecomeActive)
+            waitingForStart(context, producer, consumerController, durableQueue, Some(load.state))(thenBecomeActive)
         }
       case LoadStateFailed(attempt) =>
         // FIXME attempt counter, and give up
         context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
         // retry
-        askLoadState(context, durableRef, attempt + 1)
+        askLoadState(context, durableQueue, attempt + 1)
         Behaviors.same
     }
   }
 
   private def becomeActive[A: ClassTag](
       producerId: String,
-      durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
       state: State[A]): Behavior[InternalCommand] = {
 
     Behaviors.setup { ctx =>
@@ -266,7 +266,7 @@ object ProducerController {
             ctx.self ! ResendFirst
             false
           }
-        new ProducerController[A](ctx, producerId, durableRef, msgAdapter, timers)
+        new ProducerController[A](ctx, producerId, durableQueue, msgAdapter, timers)
           .active(state.copy(requested = requested))
       }
     }
@@ -277,16 +277,16 @@ object ProducerController {
 private class ProducerController[A: ClassTag](
     ctx: ActorContext[ProducerController.InternalCommand],
     producerId: String,
-    durableRef: Option[ActorRef[DurableProducerState.Command[A]]],
+    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
     msgAdapter: ActorRef[A],
     timers: TimerScheduler[ProducerController.InternalCommand]) {
   import ProducerController._
   import ProducerController.Internal._
   import ConsumerController.SequencedMessage
-  import DurableProducerState.StoreMessageSent
-  import DurableProducerState.StoreMessageSentAck
-  import DurableProducerState.StoreMessageConfirmed
-  import DurableProducerState.MessageSent
+  import DurableProducerQueue.StoreMessageSent
+  import DurableProducerQueue.StoreMessageSentAck
+  import DurableProducerQueue.StoreMessageConfirmed
+  import DurableProducerQueue.MessageSent
 
   private implicit val askTimeout: Timeout = 3.seconds // FIXME config
 
@@ -330,7 +330,7 @@ private class ProducerController[A: ClassTag](
 
     def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
       ctx.ask[StoreMessageSent[A], StoreMessageSentAck](
-        durableRef.get,
+        durableQueue.get,
         askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
         case Success(_) => StoreMessageSentCompleted(messageSent)
         case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
@@ -354,7 +354,7 @@ private class ProducerController[A: ClassTag](
 
       val newMaxConfirmedSeqNr = math.max(s.confirmedSeqNr, newConfirmedSeqNr)
 
-      durableRef.foreach { d =>
+      durableQueue.foreach { d =>
         // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
         // FIXME to reduce number of writes we could consider to only StoreMessageConfirmed for the Request messages and not for each Ack
         if (newMaxConfirmedSeqNr != s.confirmedSeqNr)
@@ -373,7 +373,7 @@ private class ProducerController[A: ClassTag](
     Behaviors.receiveMessage {
       case MessageWithConfirmation(m: A, replyTo) =>
         val newPendingReplies = s.pendingReplies :+ s.currentSeqNr -> replyTo
-        if (durableRef.isEmpty) {
+        if (durableQueue.isEmpty) {
           onMsg(m, newPendingReplies, ack = true)
         } else {
           storeMessageSent(MessageSent(s.currentSeqNr, m, ack = true), attempt = 1)
@@ -381,7 +381,7 @@ private class ProducerController[A: ClassTag](
         }
 
       case Msg(m: A) =>
-        if (durableRef.isEmpty) {
+        if (durableQueue.isEmpty) {
           onMsg(m, s.pendingReplies, ack = false)
         } else {
           storeMessageSent(MessageSent(s.currentSeqNr, m, ack = false), attempt = 1)

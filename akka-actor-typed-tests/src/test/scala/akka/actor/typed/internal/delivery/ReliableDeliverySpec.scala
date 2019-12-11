@@ -262,8 +262,8 @@ object ReliableDeliverySpec {
 
   }
 
-  object TestDurableProducerState {
-    import DurableProducerState._
+  object TestDurableProducerQueue {
+    import DurableProducerQueue._
     def apply[A](
         delay: FiniteDuration,
         stateHolder: AtomicReference[State[A]],
@@ -274,10 +274,10 @@ object ReliableDeliverySpec {
       Behaviors
         .supervise {
           Behaviors.setup[Command[A]] { context =>
-            context.setLoggerName("TestDurableProducerState")
+            context.setLoggerName("TestDurableProducerQueue")
             val state = stateHolder.get()
             context.log.info("Starting with seqNr [{}], confirmedSeqNr [{}]", state.currentSeqNr, state.confirmedSeqNr)
-            new TestDurableProducerState[A](context, delay, stateHolder, failWhen).active(state)
+            new TestDurableProducerQueue[A](context, delay, stateHolder, failWhen).active(state)
           }
         }
         .onFailure(SupervisorStrategy.restartWithBackoff(delay, delay, 0.0))
@@ -289,12 +289,12 @@ object ReliableDeliverySpec {
 
   }
 
-  class TestDurableProducerState[A](
-      context: ActorContext[DurableProducerState.Command[A]],
+  class TestDurableProducerQueue[A](
+      context: ActorContext[DurableProducerQueue.Command[A]],
       delay: FiniteDuration,
-      stateHolder: AtomicReference[DurableProducerState.State[A]],
-      failWhen: DurableProducerState.Command[A] => Boolean) {
-    import DurableProducerState._
+      stateHolder: AtomicReference[DurableProducerQueue.State[A]],
+      failWhen: DurableProducerQueue.Command[A] => Boolean) {
+    import DurableProducerQueue._
 
     private def active(state: State[A]): Behavior[Command[A]] = {
       stateHolder.set(state)
@@ -331,7 +331,7 @@ object ReliableDeliverySpec {
 
     private def maybeFail(cmd: Command[A]): Unit = {
       if (failWhen(cmd))
-        throw TestException(s"TestDurableProducerState failed at [$cmd]")
+        throw TestException(s"TestDurableProducerQueue failed at [$cmd]")
     }
 
   }
@@ -841,7 +841,7 @@ class ReliableDeliverySpec
 
     }
 
-    "work with flaky DurableProducerState" in {
+    "work with flaky DurableProducerQueue" in {
       nextId()
 
       val rndSeed = System.currentTimeMillis()
@@ -861,12 +861,12 @@ class ReliableDeliverySpec
         TestConsumer(defaultConsumerDelay, consumerEndCondition(31), consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
 
-      val stateHolder = new AtomicReference[DurableProducerState.State[TestConsumer.Job]]
+      val stateHolder = new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]]
       val durableProducerState =
-        TestDurableProducerState(
+        TestDurableProducerQueue(
           durableDelay,
           stateHolder,
-          (_: DurableProducerState.Command[TestConsumer.Job]) => rnd.nextDouble() < durableFailProbability)
+          (_: DurableProducerQueue.Command[TestConsumer.Job]) => rnd.nextDouble() < durableFailProbability)
 
       val producerController =
         spawn(
@@ -1110,20 +1110,20 @@ class ReliableDeliverySpec
   }
 
   // FIXME move this unit test to separate file
-  "ProducerController with durable state" must {
+  "ProducerController with durable queue" must {
 
     "load initial state and resend unconfirmed" in {
       nextId()
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
-      val durable = TestDurableProducerState[TestConsumer.Job](
+      val durable = TestDurableProducerQueue[TestConsumer.Job](
         Duration.Zero,
-        DurableProducerState.State(
+        DurableProducerQueue.State(
           currentSeqNr = 5,
           confirmedSeqNr = 2,
           unconfirmed = Vector(
-            DurableProducerState.MessageSent(3, TestConsumer.Job("msg-3"), false),
-            DurableProducerState.MessageSent(4, TestConsumer.Job("msg-4"), false))))
+            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false),
+            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false))))
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", Some(durable)), s"producerController-${idCount}")
@@ -1154,7 +1154,7 @@ class ReliableDeliverySpec
       val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
 
       val durable =
-        TestDurableProducerState[TestConsumer.Job](Duration.Zero, DurableProducerState.State.empty[TestConsumer.Job])
+        TestDurableProducerQueue[TestConsumer.Job](Duration.Zero, DurableProducerQueue.State.empty[TestConsumer.Job])
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", Some(durable)), s"producerController-${idCount}")
