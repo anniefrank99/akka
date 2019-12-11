@@ -48,7 +48,7 @@ object TestConsumer {
   }
 
   def consumerEndCondition(seqNr: Long): TestConsumer.SomeAsyncJob => Boolean = {
-    case TestConsumer.SomeAsyncJob(_, nr, _, _) => nr == seqNr
+    case TestConsumer.SomeAsyncJob(_, nr, _, _) => nr >= seqNr
   }
 
   def apply(

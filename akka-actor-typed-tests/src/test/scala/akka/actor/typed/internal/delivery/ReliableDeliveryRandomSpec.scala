@@ -42,8 +42,6 @@ object ReliableDeliveryRandomSpec {
 
 class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
   import ReliableDeliveryRandomSpec._
-  import TestConsumer.defaultConsumerDelay
-  import TestProducer.defaultProducerDelay
 
   private var idCount = 0
   private def nextId(): Int = {
@@ -53,106 +51,140 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with WordSpec
 
   private def producerId: String = s"p-$idCount"
 
+  private def test(
+      rndSeed: Long,
+      rnd: Random,
+      numberOfMessages: Int,
+      producerDropProbability: Double,
+      consumerDropProbability: Double,
+      durableFailProbability: Option[Double],
+      resendLost: Boolean): Unit = {
+
+    val consumerDelay = rnd.nextInt(40).millis
+    val producerDelay = rnd.nextInt(40).millis
+    val durableDelay = if (durableFailProbability.isDefined) rnd.nextInt(40).millis else Duration.Zero
+    system.log.infoN(
+      "Random seed [{}], consumerDropProbability [{}], producerDropProbability [{}], " +
+      "consumerDelay [{}], producerDelay [{}], durableFailProbability [{}], durableDelay [{}]",
+      rndSeed,
+      consumerDropProbability,
+      producerDropProbability,
+      consumerDelay,
+      producerDelay,
+      durableFailProbability,
+      durableDelay)
+
+    // RandomFlakyNetwork to simulate lost messages from producerController to consumerController
+    val consumerDrop: Any => Double = {
+      case _: ConsumerController.SequencedMessage[_] => consumerDropProbability
+      case _                                         => 0.0
+    }
+
+    val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+    val consumerController =
+      spawn(
+        Behaviors.intercept(() => RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](rnd, consumerDrop))(
+          ConsumerController[TestConsumer.Job](resendLost)),
+        s"consumerController-${idCount}")
+    spawn(
+      TestConsumer(consumerDelay, numberOfMessages, consumerEndProbe.ref, consumerController),
+      name = s"destination-${idCount}")
+
+    // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
+    val producerDrop: Any => Double = {
+      case _: ProducerController.Internal.Request    => producerDropProbability
+      case _: ProducerController.Internal.Resend     => producerDropProbability
+      case _: ProducerController.RegisterConsumer[_] => producerDropProbability
+      case _                                         => 0.0
+    }
+
+    val stateHolder = new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]]
+    val durableQueue = durableFailProbability.map { p =>
+      TestDurableProducerQueue(
+        durableDelay,
+        stateHolder,
+        (_: DurableProducerQueue.Command[TestConsumer.Job]) => rnd.nextDouble() < p)
+    }
+
+    val producerController = spawn(
+      Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](rnd, producerDrop))(
+        ProducerController[TestConsumer.Job](producerId, durableQueue)),
+      s"producerController-${idCount}")
+    val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
+
+    consumerController ! ConsumerController.RegisterToProducerController(producerController)
+
+    consumerEndProbe.receiveMessage(120.seconds)
+
+    testKit.stop(producer)
+    testKit.stop(producerController)
+    testKit.stop(consumerController)
+  }
+
   "ReliableDelivery with random failures" must {
 
     "work with flaky network" in {
       nextId()
-
       val rndSeed = System.currentTimeMillis()
       val rnd = new Random(rndSeed)
       val consumerDropProbability = 0.1 + rnd.nextDouble() * 0.4
       val producerDropProbability = 0.1 + rnd.nextDouble() * 0.3
-      val consumerDelay = rnd.nextInt(40).millis
-      val producerDelay = rnd.nextInt(40).millis
-      system.log.infoN(
-        "Random seed [{}], consumerDropProbability [{}], producerDropProbability [{}], " +
-        "consumerDelay [{}], producerDelay [{}]",
+      test(
         rndSeed,
-        consumerDropProbability,
+        rnd,
+        numberOfMessages = 63,
         producerDropProbability,
-        consumerDelay,
-        producerDelay)
-
-      // RandomFlakyNetwork to simulate lost messages from producerController to consumerController
-      val consumerDrop: Any => Double = {
-        case _: ConsumerController.SequencedMessage[_] => consumerDropProbability
-        case _                                         => 0.0
-      }
-
-      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
-      val consumerController =
-        spawn(
-          Behaviors.intercept(() =>
-            RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](rnd, consumerDrop))(
-            ConsumerController[TestConsumer.Job](resendLost = true)),
-          s"consumerController-${idCount}")
-      spawn(TestConsumer(consumerDelay, 63, consumerEndProbe.ref, consumerController), name = s"destination-${idCount}")
-
-      // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
-      val producerDrop: Any => Double = {
-        case _: ProducerController.Internal.Request    => producerDropProbability
-        case _: ProducerController.Internal.Resend     => producerDropProbability
-        case _: ProducerController.RegisterConsumer[_] => producerDropProbability
-        case _                                         => 0.0
-      }
-
-      val producerController = spawn(
-        Behaviors.intercept(() => RandomFlakyNetwork[ProducerController.Command[TestConsumer.Job]](rnd, producerDrop))(
-          ProducerController[TestConsumer.Job](producerId, None)),
-        s"producerController-${idCount}")
-      val producer = spawn(TestProducer(producerDelay, producerController), name = s"producer-${idCount}")
-
-      consumerController ! ConsumerController.RegisterToProducerController(producerController)
-
-      consumerEndProbe.receiveMessage(120.seconds)
-
-      testKit.stop(producer)
-      testKit.stop(producerController)
-      testKit.stop(consumerController)
-
+        consumerDropProbability,
+        durableFailProbability = None,
+        resendLost = true)
     }
 
     "work with flaky DurableProducerQueue" in {
       nextId()
-
       val rndSeed = System.currentTimeMillis()
       val rnd = new Random(rndSeed)
       val durableFailProbability = 0.1 + rnd.nextDouble() * 0.2
-      val durableDelay = rnd.nextInt(40).millis
-      system.log.infoN(
-        "Random seed [{}], durableFailProbability [{}], durableDelay [{}]",
+      test(
         rndSeed,
-        durableFailProbability,
-        durableDelay)
+        rnd,
+        numberOfMessages = 31,
+        producerDropProbability = 0.0,
+        consumerDropProbability = 0.0,
+        Some(durableFailProbability),
+        resendLost = true)
+    }
 
-      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
-      val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
-      spawn(
-        TestConsumer(defaultConsumerDelay, 31, consumerEndProbe.ref, consumerController),
-        name = s"destination-${idCount}")
+    "work with flaky network and flaky DurableProducerQueue" in {
+      nextId()
+      val rndSeed = System.currentTimeMillis()
+      val rnd = new Random(rndSeed)
+      val consumerDropProbability = 0.1 + rnd.nextDouble() * 0.4
+      val producerDropProbability = 0.1 + rnd.nextDouble() * 0.3
+      val durableFailProbability = 0.1 + rnd.nextDouble() * 0.2
+      test(
+        rndSeed,
+        rnd,
+        numberOfMessages = 17,
+        producerDropProbability,
+        consumerDropProbability,
+        Some(durableFailProbability),
+        resendLost = true)
+    }
 
-      val stateHolder = new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]]
-      val durableProducerState =
-        TestDurableProducerQueue(
-          durableDelay,
-          stateHolder,
-          (_: DurableProducerQueue.Command[TestConsumer.Job]) => rnd.nextDouble() < durableFailProbability)
-
-      val producerController =
-        spawn(
-          ProducerController[TestConsumer.Job](producerId, Some(durableProducerState)),
-          s"producerController-${idCount}")
-      val producer = spawn(TestProducer(defaultProducerDelay, producerController), name = s"producer-${idCount}")
-
-      consumerController ! ConsumerController.RegisterToProducerController(producerController)
-
-      consumerEndProbe.receiveMessage(120.seconds)
-
-      testKit.stop(producer)
-      testKit.stop(producerController)
-      testKit.stop(consumerController)
-
+    "work with flaky network without resending" in {
+      nextId()
+      val rndSeed = System.currentTimeMillis()
+      val rnd = new Random(rndSeed)
+      val consumerDropProbability = 0.1 + rnd.nextDouble() * 0.4
+      val producerDropProbability = 0.1 + rnd.nextDouble() * 0.3
+      test(
+        rndSeed,
+        rnd,
+        numberOfMessages = 63,
+        producerDropProbability,
+        consumerDropProbability,
+        durableFailProbability = None,
+        resendLost = false)
     }
 
   }
