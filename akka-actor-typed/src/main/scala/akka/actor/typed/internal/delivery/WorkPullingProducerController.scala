@@ -87,7 +87,7 @@ class WorkPullingProducerController[A: ClassTag](
         context.log.info("Registered worker [{}]", c)
         val newProducerIdCount = s.producerIdCount + 1
         val outKey = s"$producerId-$newProducerIdCount"
-        // FIXME support durableState
+        // FIXME support DurableProducerQueue
         val p = context.spawnAnonymous(ProducerController[A](outKey, durableQueueBehavior = None, seqMsg => c ! seqMsg))
         p ! ProducerController.Start(requestNextAdapter)
         p ! ProducerController.RegisterConsumer(c)
