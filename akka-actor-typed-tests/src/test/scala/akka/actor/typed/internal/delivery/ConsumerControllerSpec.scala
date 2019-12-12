@@ -253,7 +253,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
       testKit.stop(consumerController)
     }
 
-    "allow restart of ConsumerController" in {
+    "allow restart of consumer" in {
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
@@ -289,6 +289,38 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
       consumerController ! ConsumerController.Confirmed(4)
 
       testKit.stop(consumerController)
+    }
+
+    "stop ConsumerController when consumer is stopped" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe1.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      consumerProbe1.stop()
+      createTestProbe().expectTerminated(consumerController)
+    }
+
+    "stop ConsumerController when consumer is stopped before first message" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+
+      val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe1.ref)
+
+      consumerProbe1.stop()
+      createTestProbe().expectTerminated(consumerController)
     }
   }
 

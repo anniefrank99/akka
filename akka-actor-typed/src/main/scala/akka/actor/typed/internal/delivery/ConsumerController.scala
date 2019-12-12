@@ -70,6 +70,8 @@ object ConsumerController {
   final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
       extends Command[A]
 
+  private final case class ConsumerTerminated(consumer: ActorRef[_]) extends InternalCommand
+
   private final case class State[A](
       producer: ActorRef[ProducerController.InternalCommand],
       consumer: ActorRef[ConsumerController.Delivery[A]],
@@ -107,6 +109,8 @@ object ConsumerController {
 
               val next = new ConsumerController[A](ctx, timers, producerId, stashBuffer, resendLost)
                 .active(State(producer, start.deliverTo, receivedSeqNr = 0, confirmedSeqNr = 0, requestedSeqNr))
+              if (stashBuffer.nonEmpty)
+                ctx.log.info("Unstash [{}]", stashBuffer.size)
               stashBuffer.unstashAll(next)
             }
 
@@ -122,6 +126,8 @@ object ConsumerController {
                   idle(Some(reg.producerController), producer, start, firstSeqNr)
 
                 case s: Start[A] @unchecked =>
+                  start.foreach(previous => ctx.unwatch(previous.deliverTo))
+                  ctx.watchWith(s.deliverTo, ConsumerTerminated(s.deliverTo))
                   producer match {
                     case None           => idle(register, None, Some(s), firstSeqNr)
                     case Some((pid, p)) => becomeActive(pid, p, s, firstSeqNr)
@@ -151,6 +157,10 @@ object ConsumerController {
                     reg ! ProducerController.RegisterConsumer(ctx.self)
                   }
                   Behaviors.same
+
+                case ConsumerTerminated(c) =>
+                  ctx.log.info("Consumer [{}] terminated", c)
+                  Behaviors.stopped
 
               }
 
@@ -222,7 +232,14 @@ private class ConsumerController[A](
         Behaviors.unhandled
 
       case start: Start[A] @unchecked =>
+        // if consumer is restarted it may send Start again
+        context.unwatch(s.consumer)
+        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
         active(s.copy(consumer = start.deliverTo))
+
+      case ConsumerTerminated(c) =>
+        context.log.info("Consumer [{}] terminated", c)
+        Behaviors.stopped
 
       case _: RegisterToProducerController[_] =>
         Behaviors.unhandled // already registered
@@ -263,7 +280,14 @@ private class ConsumerController[A](
         Behaviors.unhandled
 
       case start: Start[A] @unchecked =>
-        active(s.copy(consumer = start.deliverTo))
+        // if consumer is restarted it may send Start again
+        context.unwatch(s.consumer)
+        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
+        resending(s.copy(consumer = start.deliverTo))
+
+      case ConsumerTerminated(c) =>
+        context.log.info("Consumer [{}] terminated", c)
+        Behaviors.stopped
 
       case _: RegisterToProducerController[_] =>
         Behaviors.unhandled // already registered
@@ -310,6 +334,8 @@ private class ConsumerController[A](
           }
 
         // FIXME can we use unstashOne instead of all?
+        if (stashBuffer.nonEmpty)
+          context.log.info("Unstash [{}]", stashBuffer.size)
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
       case seqMsg: SequencedMessage[A] @unchecked =>
@@ -327,8 +353,15 @@ private class ConsumerController[A](
         waitingForConfirmation(retryRequest(s), seqMsg)
 
       case start: Start[A] @unchecked =>
+        // if consumer is restarted it may send Start again
+        context.unwatch(s.consumer)
+        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
         start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
         waitingForConfirmation(s.copy(consumer = start.deliverTo), seqMsg)
+
+      case ConsumerTerminated(c) =>
+        context.log.info("Consumer [{}] terminated", c)
+        Behaviors.stopped
 
       case _: RegisterToProducerController[_] =>
         Behaviors.unhandled // already registered
@@ -370,5 +403,3 @@ private class ConsumerController[A](
   }
 
 }
-
-// FIXME could use watch to detect when producer or consumer are terminated

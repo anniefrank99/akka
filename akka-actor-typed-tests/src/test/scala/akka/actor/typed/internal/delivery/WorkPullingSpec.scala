@@ -119,10 +119,11 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       consumerEndProbe1.receiveMessage(10.seconds)
       consumerEndProbe2.receiveMessage()
 
-      testKit.stop(jobProducer)
-      testKit.stop(workPullingController)
       testKit.stop(workerController1)
       testKit.stop(workerController2)
+      awaitWorkersRegistered(workPullingController, 0)
+      testKit.stop(jobProducer)
+      testKit.stop(workPullingController)
     }
 
     "resend unconfirmed to other if worker dies" in {
@@ -176,3 +177,5 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
   }
 
 }
+
+// FIXME add a random test for work pulling

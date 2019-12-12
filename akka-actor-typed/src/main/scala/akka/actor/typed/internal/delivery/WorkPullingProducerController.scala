@@ -14,6 +14,7 @@ import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
 
 object WorkPullingProducerController {
@@ -51,7 +52,7 @@ object WorkPullingProducerController {
   private final case class CurrentWorkers[A](workers: Set[ActorRef[ConsumerController.Command[A]]])
       extends InternalCommand
 
-  private final case class Msg[A](msg: A) extends InternalCommand
+  private final case class Msg[A](msg: A, wasStashed: Boolean) extends InternalCommand
 
   def apply[A: ClassTag](
       producerId: String,
@@ -64,9 +65,9 @@ object WorkPullingProducerController {
             CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
           context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
 
-          Behaviors.receiveMessagePartial {
+          Behaviors.receiveMessage {
             case start: Start[A] @unchecked =>
-              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg))
+              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false))
               val requestNext = RequestNext(msgAdapter)
               val b = new WorkPullingProducerController(context, stashBuffer, producerId, start.producer, requestNext)
                 .active(State(Set.empty, Map.empty, 0, hasRequested = false))
@@ -123,8 +124,14 @@ class WorkPullingProducerController[A: ClassTag](
             case Some((key, outState)) =>
               context.stop(outState.producerController)
               // resend the unconfirmed, sending to self since order of messages for WorkPulling doesn't matter anyway
+              if (outState.unconfirmed.nonEmpty)
+                context.log.infoN(
+                  "Resending unconfirmed from deregistered worker [{}], from seqNr [{}] to [{}]",
+                  c,
+                  outState.unconfirmed.head._1,
+                  outState.unconfirmed.last._1)
               outState.unconfirmed.foreach {
-                case (_, msg) => context.self ! Msg(msg)
+                case (_, msg) => context.self ! Msg(msg, wasStashed = true)
               }
               acc.copy(out = acc.out - key)
 
@@ -139,6 +146,7 @@ class WorkPullingProducerController[A: ClassTag](
         val outKey = next.producerId
         s.out.get(outKey) match {
           case Some(outState) =>
+            context.log.info("WorkerRequestNext from [{}]", w.next.producerId)
             val newUnconfirmed = outState.unconfirmed.dropWhile { case (seqNr, _) => seqNr <= w.next.confirmedSeqNr }
             val newOut =
               s.out.updated(
@@ -147,10 +155,12 @@ class WorkPullingProducerController[A: ClassTag](
                   .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, sendNextTo = Some(next.sendNextTo)))
 
             if (stashBuffer.nonEmpty) {
+              context.log.info("Unstash [{}]", stashBuffer.size)
               stashBuffer.unstashAll(active(s.copy(out = newOut)))
             } else if (s.hasRequested) {
               active(s.copy(out = newOut))
             } else {
+              context.log.info("RequestNext after WorkerRequestNext from [{}]", w.next.producerId)
               producer ! requestNext
               active(s.copy(out = newOut, hasRequested = true))
             }
@@ -160,10 +170,15 @@ class WorkPullingProducerController[A: ClassTag](
             Behaviors.unhandled
         }
 
-      case m @ Msg(msg: A) =>
+      case m @ Msg(msg: A, wasStashed) =>
         val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.sendNextTo.isDefined }.toVector
+        context.log.info2(
+          "Received Msg [{}], consumersWithDemand [{}]",
+          m,
+          consumersWithDemand.map(_._1).mkString(", "))
         if (consumersWithDemand.isEmpty) {
-          stashBuffer.stash(m)
+          context.log.info("Stash [{}]", msg)
+          stashBuffer.stash(m.copy(wasStashed = true))
           Behaviors.same
         } else {
           val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
@@ -171,10 +186,19 @@ class WorkPullingProducerController[A: ClassTag](
           val newUnconfirmed = out.unconfirmed :+ (out.seqNr -> msg)
           val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, sendNextTo = None))
           out.sendNextTo.get ! msg
-          val hasMoreDemand = consumersWithDemand.size > 1
-          if (hasMoreDemand)
-            producer ! requestNext
-          active(s.copy(out = newOut, hasRequested = hasMoreDemand))
+
+          val hasMoreDemand = consumersWithDemand.size >= 2
+          val requested =
+            if (hasMoreDemand && (!wasStashed || stashBuffer.isEmpty)) {
+              context.log.info("RequestNext after Msg [{}]", m)
+              producer ! requestNext
+              true
+            } else if (wasStashed) {
+              s.hasRequested
+            } else {
+              false
+            }
+          active(s.copy(out = newOut, hasRequested = requested))
         }
 
       case GetWorkerStats(replyTo) =>
