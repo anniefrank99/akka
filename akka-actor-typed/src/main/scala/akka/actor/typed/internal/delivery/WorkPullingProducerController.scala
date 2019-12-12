@@ -8,11 +8,13 @@ import java.util.concurrent.ThreadLocalRandom
 
 import scala.reflect.ClassTag
 
-import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
+import akka.actor.typed.receptionist.Receptionist
+import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.scaladsl.StashBuffer
 
 object WorkPullingProducerController {
 
@@ -24,42 +26,55 @@ object WorkPullingProducerController {
 
   final case class RequestNext[A](sendNextTo: ActorRef[A])
 
-  private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
+  final case class GetWorkerStats[A](replyTo: ActorRef[WorkerStats]) extends Command[A]
+
+  final case class WorkerStats(numberOfWorkers: Int)
+
+  private final case class WorkerRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
   private case object RegisterConsumerDone extends InternalCommand
 
   private final case class OutState[A](
       producerController: ActorRef[ProducerController.Command[A]],
       consumerController: ActorRef[ConsumerController.Command[A]],
+      seqNr: Long,
+      unconfirmed: Vector[(Long, A)],
       sendNextTo: Option[ActorRef[A]])
 
-  private final case class State[A](out: Map[String, OutState[A]], producerIdCount: Long, hasRequested: Boolean)
+  private final case class State[A](
+      workers: Set[ActorRef[ConsumerController.Command[A]]],
+      out: Map[String, OutState[A]],
+      producerIdCount: Long,
+      hasRequested: Boolean)
 
-  // TODO Now the workers have to be registered explicitly/manually.
-  // We could support automatic registration via Receptionist, similar to how routers work.
-
-  final case class RegisterWorker[A](
-      consumerController: ActorRef[ConsumerController.Command[A]],
-      replyTo: ActorRef[Done])
-      extends Command[A]
+  // registration of workers via Receptionist
+  private final case class CurrentWorkers[A](workers: Set[ActorRef[ConsumerController.Command[A]]])
+      extends InternalCommand
 
   private final case class Msg[A](msg: A) extends InternalCommand
 
-  def apply[A: ClassTag](producerId: String): Behavior[Command[A]] = {
+  def apply[A: ClassTag](
+      producerId: String,
+      workerServiceKey: ServiceKey[ConsumerController.Command[A]]): Behavior[Command[A]] = {
     Behaviors
-      .setup[InternalCommand] { context =>
-        context.setLoggerName(classOf[WorkPullingProducerController[_]])
-        Behaviors.withStash[InternalCommand](Int.MaxValue) { buffer =>
+      .withStash[InternalCommand](1000) { stashBuffer => // FIXME stash config
+        Behaviors.setup[InternalCommand] { context =>
+          context.setLoggerName(classOf[WorkPullingProducerController[_]])
+          val listingAdapter = context.messageAdapter[Receptionist.Listing](listing =>
+            CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
+          context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
+
           Behaviors.receiveMessagePartial {
-            case reg: RegisterWorker[A] @unchecked =>
-              buffer.stash(reg)
-              Behaviors.same
             case start: Start[A] @unchecked =>
               val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg))
               val requestNext = RequestNext(msgAdapter)
-              val b = new WorkPullingProducerController(context, producerId, start.producer, requestNext)
-                .active(State(Map.empty, 0, hasRequested = false))
-              buffer.unstashAll(b)
+              val b = new WorkPullingProducerController(context, stashBuffer, producerId, start.producer, requestNext)
+                .active(State(Set.empty, Map.empty, 0, hasRequested = false))
+              stashBuffer.unstashAll(b)
+
+            case other =>
+              stashBuffer.stash(other)
+              Behaviors.same
           }
         }
       }
@@ -72,40 +87,72 @@ object WorkPullingProducerController {
 
 class WorkPullingProducerController[A: ClassTag](
     context: ActorContext[WorkPullingProducerController.InternalCommand],
+    stashBuffer: StashBuffer[WorkPullingProducerController.InternalCommand],
     producerId: String,
     producer: ActorRef[WorkPullingProducerController.RequestNext[A]],
     requestNext: WorkPullingProducerController.RequestNext[A]) {
   import WorkPullingProducerController._
 
-  private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
-    context.messageAdapter(WrappedRequestNext.apply)
+  private val workerRequestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
+    context.messageAdapter(WorkerRequestNext.apply)
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case RegisterWorker(c: ActorRef[ConsumerController.Command[A]] @unchecked, replyTo) =>
+      case curr: CurrentWorkers[A] @unchecked =>
         // FIXME adjust all logging, most should probably be debug
-        context.log.info("Registered worker [{}]", c)
-        val newProducerIdCount = s.producerIdCount + 1
-        val outKey = s"$producerId-$newProducerIdCount"
-        // FIXME support DurableProducerQueue
-        val p = context.spawnAnonymous(ProducerController[A](outKey, durableQueueBehavior = None, seqMsg => c ! seqMsg))
-        p ! ProducerController.Start(requestNextAdapter)
-        p ! ProducerController.RegisterConsumer(c)
-        replyTo ! Done
-        // FIXME watch and deregistration not implemented yet
-        active(s.copy(out = s.out.updated(outKey, OutState(p, c, None)), producerIdCount = newProducerIdCount))
+        val addedWorkers = curr.workers.diff(s.workers)
+        val removedWorkers = s.workers.diff(curr.workers)
 
-      case w: WrappedRequestNext[A] =>
+        val newState = addedWorkers.foldLeft(s) { (acc, c) =>
+          context.log.info("Registered worker [{}]", c)
+          val newProducerIdCount = acc.producerIdCount + 1
+          val outKey = s"$producerId-$newProducerIdCount"
+          // FIXME support DurableProducerQueue
+          val p =
+            context.spawnAnonymous(ProducerController[A](outKey, durableQueueBehavior = None))
+          p ! ProducerController.Start(workerRequestNextAdapter)
+          p ! ProducerController.RegisterConsumer(c)
+          acc.copy(
+            out = s.out.updated(outKey, OutState(p, c, 0L, Vector.empty, None)),
+            producerIdCount = newProducerIdCount)
+        }
+
+        val newState2 = removedWorkers.foldLeft(newState) { (acc, c) =>
+          context.log.info("Deregistered worker [{}]", c)
+          acc.out.find { case (_, outState) => outState.consumerController == c } match {
+            case Some((key, outState)) =>
+              context.stop(outState.producerController)
+              // resend the unconfirmed, sending to self since order of messages for WorkPulling doesn't matter anyway
+              outState.unconfirmed.foreach {
+                case (_, msg) => context.self ! Msg(msg)
+              }
+              acc.copy(out = acc.out - key)
+
+            case None => acc
+          }
+        }
+
+        active(newState2.copy(workers = curr.workers))
+
+      case w: WorkerRequestNext[A] =>
         val next = w.next
         val outKey = next.producerId
         s.out.get(outKey) match {
-          case Some(p) =>
-            val newOut = s.out.updated(outKey, p.copy(sendNextTo = Some(next.sendNextTo)))
-            if (s.hasRequested)
-              active(s.copy(newOut))
-            else {
+          case Some(outState) =>
+            val newUnconfirmed = outState.unconfirmed.dropWhile { case (seqNr, _) => seqNr <= w.next.confirmedSeqNr }
+            val newOut =
+              s.out.updated(
+                outKey,
+                outState
+                  .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, sendNextTo = Some(next.sendNextTo)))
+
+            if (stashBuffer.nonEmpty) {
+              stashBuffer.unstashAll(active(s.copy(out = newOut)))
+            } else if (s.hasRequested) {
+              active(s.copy(out = newOut))
+            } else {
               producer ! requestNext
-              active(s.copy(newOut, hasRequested = true))
+              active(s.copy(out = newOut, hasRequested = true))
             }
 
           case None =>
@@ -113,21 +160,26 @@ class WorkPullingProducerController[A: ClassTag](
             Behaviors.unhandled
         }
 
-      case Msg(msg: A) =>
+      case m @ Msg(msg: A) =>
         val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.sendNextTo.isDefined }.toVector
         if (consumersWithDemand.isEmpty) {
-          // FIXME all consumers have deregistered, need buffering or something
-          throw new IllegalStateException(s"Deregister of consumers not supported yet. Message not handled: $msg")
+          stashBuffer.stash(m)
+          Behaviors.same
         } else {
           val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
           val (outKey, out) = consumersWithDemand(i)
-          val newOut = s.out.updated(outKey, out.copy(sendNextTo = None))
+          val newUnconfirmed = out.unconfirmed :+ (out.seqNr -> msg)
+          val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, sendNextTo = None))
           out.sendNextTo.get ! msg
           val hasMoreDemand = consumersWithDemand.size > 1
           if (hasMoreDemand)
             producer ! requestNext
-          active(s.copy(newOut, hasRequested = hasMoreDemand))
+          active(s.copy(out = newOut, hasRequested = hasMoreDemand))
         }
+
+      case GetWorkerStats(replyTo) =>
+        replyTo ! WorkerStats(s.workers.size)
+        Behaviors.same
 
       case RegisterConsumerDone =>
         Behaviors.same
