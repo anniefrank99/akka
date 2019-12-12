@@ -162,6 +162,59 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
       testKit.stop(consumerController)
     }
 
+    "stash while waiting for consumer confirmation" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed(1)
+
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
+      consumerProbe.expectNoMessage()
+
+      consumerController ! ConsumerController.Confirmed(2)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
+      consumerController ! ConsumerController.Confirmed(3)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
+      consumerController ! ConsumerController.Confirmed(4)
+
+      consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 6, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 7, producerControllerProbe.ref)
+
+      // ProducerController may resend unconfirmed
+      consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 6, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 7, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 8, producerControllerProbe.ref)
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
+      consumerController ! ConsumerController.Confirmed(5)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(6)
+      consumerController ! ConsumerController.Confirmed(6)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(7)
+      consumerController ! ConsumerController.Confirmed(7)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(8)
+      consumerController ! ConsumerController.Confirmed(8)
+
+      consumerProbe.expectNoMessage()
+
+      testKit.stop(consumerController)
+    }
+
     "optionally ack messages" in {
       nextId()
       val consumerController =

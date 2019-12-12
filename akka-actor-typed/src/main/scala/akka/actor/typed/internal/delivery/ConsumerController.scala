@@ -81,10 +81,10 @@ object ConsumerController {
 
   def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
     Behaviors
-      .setup[InternalCommand] { ctx =>
-        ctx.setLoggerName(classOf[ConsumerController[_]])
-        Behaviors.withTimers { timers =>
-          Behaviors.withStash(100) { stashBuffer =>
+      .withStash[InternalCommand](RequestWindow) { stashBuffer =>
+        Behaviors.setup { ctx =>
+          ctx.setLoggerName(classOf[ConsumerController[_]])
+          Behaviors.withTimers { timers =>
             def becomeActive(
                 producerId: String,
                 producer: ActorRef[ProducerController.InternalCommand],
@@ -312,6 +312,17 @@ private class ConsumerController[A](
         // FIXME can we use unstashOne instead of all?
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
+      case seqMsg: SequencedMessage[A] @unchecked =>
+        if (stashBuffer.isFull) {
+          // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
+          // dropping them since they can be resent
+          context.log.info("Stash is full, dropping [{}]", seqMsg)
+        } else {
+          context.log.info("Stash [{}]", seqMsg)
+          stashBuffer.stash(seqMsg)
+        }
+        Behaviors.same
+
       case Retry =>
         waitingForConfirmation(retryRequest(s), seqMsg)
 
@@ -319,10 +330,8 @@ private class ConsumerController[A](
         start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
         waitingForConfirmation(s.copy(consumer = start.deliverTo), seqMsg)
 
-      case msg =>
-        context.log.info("Stash [{}]", msg)
-        stashBuffer.stash(msg)
-        Behaviors.same
+      case _: RegisterToProducerController[_] =>
+        Behaviors.unhandled // already registered
     }
   }
 
