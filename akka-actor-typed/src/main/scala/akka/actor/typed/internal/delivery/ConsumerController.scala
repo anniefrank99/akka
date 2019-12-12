@@ -209,13 +209,13 @@ private class ConsumerController[A](
         } else { // seqNr < expectedSeqNr
           context.log.infoN("from producer [{}], deduplicate [{}], expected [{}]", pid, seqNr, expectedSeqNr)
           if (seqMsg.first)
-            retryRequest(s)
-          Behaviors.same
+            active(retryRequest(s))
+          else
+            Behaviors.same
         }
 
       case Retry =>
-        retryRequest(s)
-        Behaviors.same
+        active(retryRequest(s))
 
       case Confirmed(seqNr) =>
         context.log.warn("Unexpected confirmed [{}]", seqNr)
@@ -313,8 +313,7 @@ private class ConsumerController[A](
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
       case Retry =>
-        retryRequest(s)
-        Behaviors.same
+        waitingForConfirmation(retryRequest(s), seqMsg)
 
       case start: Start[A] @unchecked =>
         start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
@@ -332,10 +331,12 @@ private class ConsumerController[A](
   }
 
   // in case the Request or the SequencedMessage triggering the Request is lost
-  private def retryRequest(s: State[A]): Unit = {
-    context.log.info("retry Request [{}]", s.requestedSeqNr)
+  private def retryRequest(s: State[A]): State[A] = {
+    val newRequestedSeqNr = if (resendLost) s.requestedSeqNr else s.receivedSeqNr + RequestWindow / 2
+    context.log.info("retry Request [{}]", newRequestedSeqNr)
     // FIXME may watch the producer to avoid sending retry Request to dead producer
-    s.producer ! Request(s.confirmedSeqNr, s.requestedSeqNr, resendLost, viaTimeout = true)
+    s.producer ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
+    s.copy(requestedSeqNr = newRequestedSeqNr)
   }
 
   private def checkProducerId(producerId: String, incomingProducerId: String, seqNr: Long): Unit = {
