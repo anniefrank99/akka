@@ -87,7 +87,7 @@ object ProducerController {
   object Internal {
     final case class Request(confirmedSeqNr: Long, upToSeqNr: Long, supportResend: Boolean, viaTimeout: Boolean)
         extends InternalCommand {
-      require(confirmedSeqNr < upToSeqNr)
+      require(confirmedSeqNr <= upToSeqNr, s"confirmedSeqNr [$confirmedSeqNr] should be <= upToSeqNr [$upToSeqNr]")
     }
     final case class Resend(fromSeqNr: Long) extends InternalCommand
     final case class Ack(confirmedSeqNr: Long) extends InternalCommand
