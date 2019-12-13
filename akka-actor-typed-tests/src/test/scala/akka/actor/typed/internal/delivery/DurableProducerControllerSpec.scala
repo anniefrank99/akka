@@ -4,10 +4,13 @@
 
 package akka.actor.typed.internal.delivery
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.concurrent.duration._
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
 import akka.actor.typed.internal.delivery.ProducerController.MessageWithConfirmation
 import org.scalatest.WordSpecLike
 
@@ -57,6 +60,52 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordS
       val sendTo = producerProbe.receiveMessage().sendNextTo
       sendTo ! TestConsumer.Job("msg-5")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 5, producerController))
+
+      testKit.stop(producerController)
+    }
+
+    "store confirmations" in {
+      nextId()
+      val consumerControllerProbe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+
+      val stateHolder =
+        new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]](DurableProducerQueue.State.empty)
+      val durable = TestDurableProducerQueue[TestConsumer.Job](
+        Duration.Zero,
+        stateHolder,
+        (_: DurableProducerQueue.Command[_]) => false)
+
+      val producerController =
+        spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
+          .unsafeUpcast[ProducerController.InternalCommand]
+      val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      producerController ! ProducerController.RegisterConsumer(consumerControllerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
+      producerProbe.awaitAssert {
+        stateHolder.get() should ===(
+          DurableProducerQueue.State(2, 0, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false))))
+      }
+      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerProbe.awaitAssert {
+        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Vector.empty))
+      }
+
+      val replyTo = createTestProbe[Long]()
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController, ack = true))
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController, ack = true))
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyTo.ref)
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController, ack = true))
+      producerController ! ProducerController.Internal.Ack(3)
+      producerProbe.awaitAssert {
+        stateHolder.get() should ===(
+          DurableProducerQueue.State(5, 3, Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true))))
+      }
 
       testKit.stop(producerController)
     }

@@ -9,64 +9,11 @@ import scala.concurrent.duration._
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
-import akka.actor.typed.Behavior
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
-import akka.actor.typed.scaladsl.Behaviors
 import org.scalatest.WordSpecLike
 
-object WorkPullingSpec {
-  val workerServiceKey: ServiceKey[ConsumerController.Command[TestConsumer.Job]] = ServiceKey("worker")
-
-  object TestProducerWorkPulling {
-
-    trait Command
-    final case class RequestNext(sendTo: ActorRef[TestConsumer.Job]) extends Command
-    private final case object Tick extends Command
-
-    def apply(
-        delay: FiniteDuration,
-        producerController: ActorRef[WorkPullingProducerController.Start[TestConsumer.Job]]): Behavior[Command] = {
-      Behaviors.setup { context =>
-        context.setLoggerName("TestProducerWorkPulling")
-        val requestNextAdapter: ActorRef[WorkPullingProducerController.RequestNext[TestConsumer.Job]] =
-          context.messageAdapter(req => RequestNext(req.sendNextTo))
-        producerController ! WorkPullingProducerController.Start(requestNextAdapter)
-
-        Behaviors.withTimers { timers =>
-          timers.startTimerWithFixedDelay(Tick, Tick, delay)
-          idle(0)
-        }
-      }
-    }
-
-    private def idle(n: Int): Behavior[Command] = {
-      Behaviors.receiveMessage {
-        case Tick                => Behaviors.same
-        case RequestNext(sendTo) => active(n + 1, sendTo)
-      }
-    }
-
-    private def active(n: Int, sendTo: ActorRef[TestConsumer.Job]): Behavior[Command] = {
-      Behaviors.receive { (ctx, msg) =>
-        msg match {
-          case Tick =>
-            val msg = s"msg-$n"
-            ctx.log.info("sent {}", msg)
-            sendTo ! TestConsumer.Job(msg)
-            idle(n)
-
-          case RequestNext(_) =>
-            throw new IllegalStateException("Unexpected RequestNext, already got one.")
-        }
-      }
-    }
-
-  }
-}
-
 class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
-  import WorkPullingSpec._
   import TestConsumer.defaultConsumerDelay
   import TestProducer.defaultProducerDelay
 
@@ -86,8 +33,9 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       controller ! WorkPullingProducerController.GetWorkerStats(probe.ref)
       probe.receiveMessage().numberOfWorkers should ===(count)
     }
-
   }
+
+  val workerServiceKey: ServiceKey[ConsumerController.Command[TestConsumer.Job]] = ServiceKey("worker")
 
   "ReliableDelivery with work-pulling" must {
 
@@ -95,7 +43,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       nextId()
       val workPullingController =
         spawn(
-          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, None),
           s"workPullingController-${idCount}")
       val jobProducer =
         spawn(TestProducerWorkPulling(defaultProducerDelay, workPullingController), name = s"jobProducer-${idCount}")
@@ -130,7 +78,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       nextId()
       val workPullingController =
         spawn(
-          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, None),
           s"workPullingController-${idCount}")
       val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
       workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
@@ -181,7 +129,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       nextId()
       val workPullingController =
         spawn(
-          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, None),
           s"workPullingController-${idCount}")
       val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
       workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
@@ -223,7 +171,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       nextId()
       val workPullingController =
         spawn(
-          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, None),
           s"workPullingController-${idCount}")
       val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
       workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)

@@ -47,6 +47,15 @@ object WorkPullingProducerController {
 
   private case object RegisterConsumerDone extends InternalCommand
 
+  private case class LoadStateReply[A](state: DurableProducerQueue.State[A]) extends InternalCommand
+  private case class LoadStateFailed(attempt: Int) extends InternalCommand
+  private case class StoreMessageSentReply(ack: DurableProducerQueue.StoreMessageSentAck)
+  private case class StoreMessageSentFailed[A](messageSent: DurableProducerQueue.MessageSent[A], attempt: Int)
+      extends InternalCommand
+
+  private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
+      extends InternalCommand
+
   private final case class OutState[A](
       producerController: ActorRef[ProducerController.Command[A]],
       consumerController: ActorRef[ConsumerController.Command[A]],
@@ -54,15 +63,18 @@ object WorkPullingProducerController {
       unconfirmed: Vector[Unconfirmed[A]],
       askNextTo: Option[ActorRef[ProducerController.MessageWithConfirmation[A]]])
 
-  private final case class Unconfirmed[A](seqNr: Long, msg: A, replyTo: Option[ActorRef[Long]])
+  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, msg: A, replyTo: Option[ActorRef[Long]])
 
   private object State {
-    def empty[A]: State[A] = State(Set.empty, Map.empty, 0, hasRequested = false)
+    def empty[A]: State[A] = State(1, Set.empty, Map.empty, Vector.empty, 0, hasRequested = false)
   }
 
   private final case class State[A](
+      currentSeqNr: Long,
       workers: Set[ActorRef[ConsumerController.Command[A]]],
       out: Map[String, OutState[A]],
+      // pendingReplies is used when durableQueue is enabled, otherwise they are tracked in OutState
+      pendingReplies: Vector[(Long, ActorRef[Long])],
       producerIdCount: Long,
       hasRequested: Boolean)
 
@@ -74,7 +86,8 @@ object WorkPullingProducerController {
 
   def apply[A: ClassTag](
       producerId: String,
-      workerServiceKey: ServiceKey[ConsumerController.Command[A]]): Behavior[Command[A]] = {
+      workerServiceKey: ServiceKey[ConsumerController.Command[A]],
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .withStash[InternalCommand](1000) { stashBuffer => // FIXME stash config
         Behaviors.setup[InternalCommand] { context =>
@@ -83,24 +96,104 @@ object WorkPullingProducerController {
             CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
           context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
 
-          Behaviors.receiveMessage {
-            case start: Start[A] @unchecked =>
-              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
-              val requestNext = RequestNext[A](msgAdapter, context.self)
-              val b = new WorkPullingProducerController(context, stashBuffer, producerId, start.producer, requestNext)
-                .active(State.empty)
-              stashBuffer.unstashAll(b)
+          val durableQueue = askLoadState(context, durableQueueBehavior)
 
-            case other =>
-              stashBuffer.stash(other)
-              Behaviors.same
-          }
+          waitingForStart(
+            producerId,
+            context,
+            stashBuffer,
+            durableQueue,
+            None,
+            createInitialState(durableQueue.nonEmpty))
         }
       }
       .narrow
   }
 
-  // FIXME MessageWithConfirmation not implemented yet, see ProducerController
+  private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
+    if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[A])
+  }
+
+  private def waitingForStart[A: ClassTag](
+      producerId: String,
+      context: ActorContext[InternalCommand],
+      stashBuffer: StashBuffer[InternalCommand],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      producer: Option[ActorRef[RequestNext[A]]],
+      initialState: Option[DurableProducerQueue.State[A]]): Behavior[InternalCommand] = {
+
+    def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
+      // resend unconfirmed to self, order doesn't matter for work pulling
+      s.unconfirmed.foreach {
+        case DurableProducerQueue.MessageSent(_, msg, _) => context.self ! Msg(msg, wasStashed = true, replyTo = None)
+      }
+
+      val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
+      val requestNext = RequestNext[A](msgAdapter, context.self)
+      val b = new WorkPullingProducerController(context, stashBuffer, producerId, p, requestNext, durableQueue)
+        .active(State.empty[A].copy(currentSeqNr = s.currentSeqNr))
+      stashBuffer.unstashAll(b)
+    }
+
+    Behaviors.receiveMessage {
+      case start: Start[A] @unchecked =>
+        initialState match {
+          case Some(s) =>
+            becomeActive(start.producer, s)
+          case None =>
+            // waiting for LoadStateReply
+            waitingForStart(producerId, context, stashBuffer, durableQueue, Some(start.producer), initialState)
+        }
+
+      case load: LoadStateReply[A] @unchecked =>
+        producer match {
+          case Some(p) =>
+            becomeActive(p, load.state)
+          case None =>
+            // waiting for LoadStateReply
+            waitingForStart(producerId, context, stashBuffer, durableQueue, producer, Some(load.state))
+        }
+
+      case LoadStateFailed(attempt) =>
+        // FIXME attempt counter, and give up
+        context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+        // retry
+        askLoadState(context, durableQueue, attempt + 1)
+        Behaviors.same
+
+      case other =>
+        stashBuffer.stash(other)
+        Behaviors.same
+    }
+  }
+
+  private def askLoadState[A: ClassTag](
+      context: ActorContext[InternalCommand],
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]])
+      : Option[ActorRef[DurableProducerQueue.Command[A]]] = {
+
+    durableQueueBehavior.map { b =>
+      val ref = context.spawn(b, "durable")
+      context.watch(ref) // FIXME handle terminated, but it's supposed to be restarted so death pact is alright
+      askLoadState(context, Some(ref), attempt = 1)
+      ref
+    }
+  }
+
+  private def askLoadState[A: ClassTag](
+      context: ActorContext[InternalCommand],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      attempt: Int): Unit = {
+    implicit val loadTimeout: Timeout = 3.seconds // FIXME config
+    durableQueue.foreach { ref =>
+      context.ask[DurableProducerQueue.LoadState[A], DurableProducerQueue.State[A]](
+        ref,
+        askReplyTo => DurableProducerQueue.LoadState[A](askReplyTo)) {
+        case Success(s) => LoadStateReply(s)
+        case Failure(_) => LoadStateFailed(attempt) // timeout
+      }
+    }
+  }
 
 }
 
@@ -109,14 +202,24 @@ class WorkPullingProducerController[A: ClassTag](
     stashBuffer: StashBuffer[WorkPullingProducerController.InternalCommand],
     producerId: String,
     producer: ActorRef[WorkPullingProducerController.RequestNext[A]],
-    requestNext: WorkPullingProducerController.RequestNext[A]) {
+    requestNext: WorkPullingProducerController.RequestNext[A],
+    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]]) {
   import WorkPullingProducerController._
+  import DurableProducerQueue.StoreMessageSent
+  import DurableProducerQueue.StoreMessageSentAck
+  import DurableProducerQueue.StoreMessageConfirmed
+  import DurableProducerQueue.MessageSent
 
   private val workerRequestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WorkerRequestNext.apply)
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
-    def onMessage(msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Long]]): Behavior[InternalCommand] = {
+    def onMessage(
+        msg: A,
+        wasStashed: Boolean,
+        replyTo: Option[ActorRef[Long]],
+        totalSeqNr: Long,
+        newPendingReplies: Vector[(Long, ActorRef[Long])]): Behavior[InternalCommand] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
       context.log.infoN(
         "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}]",
@@ -126,11 +229,11 @@ class WorkPullingProducerController[A: ClassTag](
       if (consumersWithDemand.isEmpty) {
         context.log.info("Stash [{}]", msg)
         stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
-        Behaviors.same
+        active(s.copy(pendingReplies = newPendingReplies))
       } else {
         val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
         val (outKey, out) = consumersWithDemand(i)
-        val newUnconfirmed = out.unconfirmed :+ Unconfirmed(out.seqNr, msg, replyTo)
+        val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, msg, replyTo)
         val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, askNextTo = None))
         implicit val askTimeout: Timeout = 60.seconds // FIXME config
         context.ask[ProducerController.MessageWithConfirmation[A], Long](
@@ -151,28 +254,80 @@ class WorkPullingProducerController[A: ClassTag](
           } else {
             false
           }
-        active(s.copy(out = newOut, hasRequested = requested))
+        active(s.copy(out = newOut, hasRequested = requested, pendingReplies = newPendingReplies))
+      }
+    }
+
+    def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
+      implicit val askTimeout: Timeout = 3.seconds // FIXME config
+      context.ask[StoreMessageSent[A], StoreMessageSentAck](
+        durableQueue.get,
+        askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
+        case Success(_) => StoreMessageSentCompleted(messageSent)
+        case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
       }
     }
 
     def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
-      val (replies, newUnconfirmed) = outState.unconfirmed.partition {
-        case Unconfirmed(seqNr, _, _) => seqNr <= confirmedSeqNr
+      val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
+        case Unconfirmed(_, seqNr, _, _) => seqNr <= confirmedSeqNr
       }
-      replies.foreach {
-        case Unconfirmed(_, _, None) => // no reply
-        case Unconfirmed(_, _, Some(replyTo)) =>
-          replyTo ! -1 // FIXME use another global seqNr counter or reply with Done
+      if (confirmed.nonEmpty) {
+        confirmed.foreach {
+          case Unconfirmed(_, _, _, None) => // no reply
+          case Unconfirmed(_, _, _, Some(replyTo)) =>
+            replyTo ! -1 // FIXME use another global seqNr counter or reply with Done
+        }
+
+        durableQueue.foreach { d =>
+          // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr)
+        }
       }
+
       newUnconfirmed
     }
 
     Behaviors.receiveMessage {
       case Msg(msg: A, wasStashed, replyTo) =>
-        onMessage(msg, wasStashed, replyTo)
+        if (durableQueue.isEmpty || wasStashed) {
+          // currentSeqNr is only updated when durableQueue is enabled
+          onMessage(msg, wasStashed, replyTo, s.currentSeqNr, s.pendingReplies)
+        } else {
+          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = false), attempt = 1)
+          active(s.copy(currentSeqNr = s.currentSeqNr + 1))
+        }
 
-      case MessageWithConfirmation(m: A, replyTo) =>
-        onMessage(m, wasStashed = false, Some(replyTo))
+      case MessageWithConfirmation(msg: A, replyTo) =>
+        if (durableQueue.isEmpty) {
+          onMessage(msg, wasStashed = false, Some(replyTo), s.currentSeqNr, s.pendingReplies)
+        } else {
+          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = true), attempt = 1)
+          val newPendingReplies = s.pendingReplies :+ (s.currentSeqNr -> replyTo)
+          active(s.copy(currentSeqNr = s.currentSeqNr + 1, pendingReplies = newPendingReplies))
+        }
+
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _)) =>
+        val newPendingReplies =
+          if (s.pendingReplies.isEmpty) {
+            s.pendingReplies
+          } else {
+            val (headSeqNr, replyTo) = s.pendingReplies.head
+            if (headSeqNr != seqNr)
+              throw new IllegalStateException(s"Unexpected pending reply [$headSeqNr] after storage of [$seqNr].")
+            context.log.info("Confirmation reply to [{}] after storage", seqNr)
+            replyTo ! seqNr
+            s.pendingReplies.tail
+          }
+
+        onMessage(m, wasStashed = false, replyTo = None, seqNr, newPendingReplies)
+
+      case f: StoreMessageSentFailed[A] @unchecked =>
+        // FIXME attempt counter, and give up
+        context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+        // retry
+        storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+        Behaviors.same
 
       case Ack(outKey, confirmedSeqNr) =>
         s.out.get(outKey) match {
@@ -213,10 +368,10 @@ class WorkPullingProducerController[A: ClassTag](
                 context.log.infoN(
                   "Resending unconfirmed from deregistered worker [{}], from seqNr [{}] to [{}]",
                   c,
-                  outState.unconfirmed.head.seqNr,
-                  outState.unconfirmed.last.seqNr)
+                  outState.unconfirmed.head.outSeqNr,
+                  outState.unconfirmed.last.outSeqNr)
               outState.unconfirmed.foreach {
-                case Unconfirmed(_, msg, replyTo) => context.self ! Msg(msg, wasStashed = true, replyTo)
+                case Unconfirmed(_, _, msg, replyTo) => context.self ! Msg(msg, wasStashed = true, replyTo)
               }
               acc.copy(out = acc.out - key)
 
