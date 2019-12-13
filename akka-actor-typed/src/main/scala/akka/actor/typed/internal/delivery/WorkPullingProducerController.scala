@@ -6,7 +6,10 @@ package akka.actor.typed.internal.delivery
 
 import java.util.concurrent.ThreadLocalRandom
 
+import scala.concurrent.duration._
 import scala.reflect.ClassTag
+import scala.util.Failure
+import scala.util.Success
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
@@ -16,6 +19,7 @@ import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
+import akka.util.Timeout
 
 object WorkPullingProducerController {
 
@@ -25,7 +29,13 @@ object WorkPullingProducerController {
 
   final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
 
-  final case class RequestNext[A](sendNextTo: ActorRef[A])
+  final case class RequestNext[A](sendNextTo: ActorRef[A], askNextTo: ActorRef[MessageWithConfirmation[A]])
+
+  /**
+   * For sending confirmation message back to the producer when the message has been fully delivered, processed,
+   * and confirmed by the consumer. Typically used with `ask` from the producer.
+   */
+  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
 
   final case class GetWorkerStats[A](replyTo: ActorRef[WorkerStats]) extends Command[A]
 
@@ -33,14 +43,22 @@ object WorkPullingProducerController {
 
   private final case class WorkerRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
+  private final case class Ack(outKey: String, confirmedSeqNr: Long) extends InternalCommand
+
   private case object RegisterConsumerDone extends InternalCommand
 
   private final case class OutState[A](
       producerController: ActorRef[ProducerController.Command[A]],
       consumerController: ActorRef[ConsumerController.Command[A]],
       seqNr: Long,
-      unconfirmed: Vector[(Long, A)],
-      sendNextTo: Option[ActorRef[A]])
+      unconfirmed: Vector[Unconfirmed[A]],
+      askNextTo: Option[ActorRef[ProducerController.MessageWithConfirmation[A]]])
+
+  private final case class Unconfirmed[A](seqNr: Long, msg: A, replyTo: Option[ActorRef[Long]])
+
+  private object State {
+    def empty[A]: State[A] = State(Set.empty, Map.empty, 0, hasRequested = false)
+  }
 
   private final case class State[A](
       workers: Set[ActorRef[ConsumerController.Command[A]]],
@@ -52,7 +70,7 @@ object WorkPullingProducerController {
   private final case class CurrentWorkers[A](workers: Set[ActorRef[ConsumerController.Command[A]]])
       extends InternalCommand
 
-  private final case class Msg[A](msg: A, wasStashed: Boolean) extends InternalCommand
+  private final case class Msg[A](msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Long]]) extends InternalCommand
 
   def apply[A: ClassTag](
       producerId: String,
@@ -67,10 +85,10 @@ object WorkPullingProducerController {
 
           Behaviors.receiveMessage {
             case start: Start[A] @unchecked =>
-              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false))
-              val requestNext = RequestNext(msgAdapter)
+              val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
+              val requestNext = RequestNext[A](msgAdapter, context.self)
               val b = new WorkPullingProducerController(context, stashBuffer, producerId, start.producer, requestNext)
-                .active(State(Set.empty, Map.empty, 0, hasRequested = false))
+                .active(State.empty)
               stashBuffer.unstashAll(b)
 
             case other =>
@@ -98,7 +116,74 @@ class WorkPullingProducerController[A: ClassTag](
     context.messageAdapter(WorkerRequestNext.apply)
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
+    def onMessage(msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Long]]): Behavior[InternalCommand] = {
+      val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
+      context.log.infoN(
+        "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}]",
+        msg,
+        wasStashed,
+        consumersWithDemand.map(_._1).mkString(", "))
+      if (consumersWithDemand.isEmpty) {
+        context.log.info("Stash [{}]", msg)
+        stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
+        Behaviors.same
+      } else {
+        val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
+        val (outKey, out) = consumersWithDemand(i)
+        val newUnconfirmed = out.unconfirmed :+ Unconfirmed(out.seqNr, msg, replyTo)
+        val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, askNextTo = None))
+        implicit val askTimeout: Timeout = 60.seconds // FIXME config
+        context.ask[ProducerController.MessageWithConfirmation[A], Long](
+          out.askNextTo.get,
+          ProducerController.MessageWithConfirmation(msg, _)) {
+          case Success(seqNr) => Ack(outKey, seqNr)
+          case Failure(exc)   => throw exc // FIXME what to do for AskTimeout?
+        }
+
+        val hasMoreDemand = consumersWithDemand.size >= 2
+        val requested =
+          if (hasMoreDemand && (!wasStashed || stashBuffer.isEmpty)) {
+            context.log.info("RequestNext after Msg [{}]", msg)
+            producer ! requestNext
+            true
+          } else if (wasStashed) {
+            s.hasRequested
+          } else {
+            false
+          }
+        active(s.copy(out = newOut, hasRequested = requested))
+      }
+    }
+
+    def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
+      val (replies, newUnconfirmed) = outState.unconfirmed.partition {
+        case Unconfirmed(seqNr, _, _) => seqNr <= confirmedSeqNr
+      }
+      replies.foreach {
+        case Unconfirmed(_, _, None) => // no reply
+        case Unconfirmed(_, _, Some(replyTo)) =>
+          replyTo ! -1 // FIXME use another global seqNr counter or reply with Done
+      }
+      newUnconfirmed
+    }
+
     Behaviors.receiveMessage {
+      case Msg(msg: A, wasStashed, replyTo) =>
+        onMessage(msg, wasStashed, replyTo)
+
+      case MessageWithConfirmation(m: A, replyTo) =>
+        onMessage(m, wasStashed = false, Some(replyTo))
+
+      case Ack(outKey, confirmedSeqNr) =>
+        s.out.get(outKey) match {
+          case Some(outState) =>
+            val newUnconfirmed = onAck(outState, confirmedSeqNr)
+            active(s.copy(out = s.out.updated(outKey, outState.copy(unconfirmed = newUnconfirmed))))
+          case None =>
+            // obsolete Next, ConsumerController already deregistered
+            Behaviors.unhandled
+        }
+
       case curr: CurrentWorkers[A] @unchecked =>
         // FIXME adjust all logging, most should probably be debug
         val addedWorkers = curr.workers.diff(s.workers)
@@ -128,10 +213,10 @@ class WorkPullingProducerController[A: ClassTag](
                 context.log.infoN(
                   "Resending unconfirmed from deregistered worker [{}], from seqNr [{}] to [{}]",
                   c,
-                  outState.unconfirmed.head._1,
-                  outState.unconfirmed.last._1)
+                  outState.unconfirmed.head.seqNr,
+                  outState.unconfirmed.last.seqNr)
               outState.unconfirmed.foreach {
-                case (_, msg) => context.self ! Msg(msg, wasStashed = true)
+                case Unconfirmed(_, msg, replyTo) => context.self ! Msg(msg, wasStashed = true, replyTo)
               }
               acc.copy(out = acc.out - key)
 
@@ -146,13 +231,16 @@ class WorkPullingProducerController[A: ClassTag](
         val outKey = next.producerId
         s.out.get(outKey) match {
           case Some(outState) =>
-            context.log.info("WorkerRequestNext from [{}]", w.next.producerId)
-            val newUnconfirmed = outState.unconfirmed.dropWhile { case (seqNr, _) => seqNr <= w.next.confirmedSeqNr }
+            val confirmedSeqNr = w.next.confirmedSeqNr
+            context.log.info2("WorkerRequestNext from [{}], confirmedSeqNr [{}]", w.next.producerId, confirmedSeqNr)
+
+            val newUnconfirmed = onAck(outState, confirmedSeqNr)
+
             val newOut =
               s.out.updated(
                 outKey,
                 outState
-                  .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, sendNextTo = Some(next.sendNextTo)))
+                  .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, askNextTo = Some(next.askNextTo)))
 
             if (stashBuffer.nonEmpty) {
               context.log.info("Unstash [{}]", stashBuffer.size)
@@ -168,37 +256,6 @@ class WorkPullingProducerController[A: ClassTag](
           case None =>
             // obsolete Next, ConsumerController already deregistered
             Behaviors.unhandled
-        }
-
-      case m @ Msg(msg: A, wasStashed) =>
-        val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.sendNextTo.isDefined }.toVector
-        context.log.info2(
-          "Received Msg [{}], consumersWithDemand [{}]",
-          m,
-          consumersWithDemand.map(_._1).mkString(", "))
-        if (consumersWithDemand.isEmpty) {
-          context.log.info("Stash [{}]", msg)
-          stashBuffer.stash(m.copy(wasStashed = true))
-          Behaviors.same
-        } else {
-          val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
-          val (outKey, out) = consumersWithDemand(i)
-          val newUnconfirmed = out.unconfirmed :+ (out.seqNr -> msg)
-          val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, sendNextTo = None))
-          out.sendNextTo.get ! msg
-
-          val hasMoreDemand = consumersWithDemand.size >= 2
-          val requested =
-            if (hasMoreDemand && (!wasStashed || stashBuffer.isEmpty)) {
-              context.log.info("RequestNext after Msg [{}]", m)
-              producer ! requestNext
-              true
-            } else if (wasStashed) {
-              s.hasRequested
-            } else {
-              false
-            }
-          active(s.copy(out = newOut, hasRequested = requested))
         }
 
       case GetWorkerStats(replyTo) =>

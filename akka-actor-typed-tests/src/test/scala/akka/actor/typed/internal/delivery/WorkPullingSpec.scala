@@ -171,6 +171,104 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
         TestConsumer.Job("msg-4"))
 
+      workerController2Probe.stop()
+      awaitWorkersRegistered(workPullingController, 0)
+      testKit.stop(workPullingController)
+    }
+
+    "reply to MessageWithConfirmation" in {
+      import WorkPullingProducerController.MessageWithConfirmation
+      nextId()
+      val workPullingController =
+        spawn(
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          s"workPullingController-${idCount}")
+      val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
+      workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
+
+      val workerController1Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
+      awaitWorkersRegistered(workPullingController, 1)
+
+      val replyProbe = createTestProbe[Long]()
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
+      val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
+      seqMsg1.ack should ===(true)
+      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      replyProbe.receiveMessage()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
+      val seqMsg2 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg2.msg should ===(TestConsumer.Job("msg-2"))
+      seqMsg2.ack should ===(true)
+      // no reply until ack
+      replyProbe.expectNoMessage()
+      seqMsg2.producer ! ProducerController.Internal.Ack(2L)
+      replyProbe.receiveMessage()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyProbe.ref)
+      workerController1Probe.receiveMessages(2)
+      seqMsg2.producer ! ProducerController.Internal.Ack(4L)
+      replyProbe.receiveMessages(2)
+
+      workerController1Probe.stop()
+      awaitWorkersRegistered(workPullingController, 0)
+      testKit.stop(workPullingController)
+    }
+
+    "reply to MessageWithConfirmation also when worker dies" in {
+      import WorkPullingProducerController.MessageWithConfirmation
+      nextId()
+      val workPullingController =
+        spawn(
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey),
+          s"workPullingController-${idCount}")
+      val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
+      workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
+
+      val workerController1Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
+      awaitWorkersRegistered(workPullingController, 1)
+
+      val replyProbe = createTestProbe[Long]()
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
+      val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      replyProbe.receiveMessage()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
+      workerController1Probe.receiveMessage()
+      seqMsg1.producer ! ProducerController.Internal.Ack(2L)
+      replyProbe.receiveMessage()
+
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyProbe.ref)
+      workerController1Probe.receiveMessages(2)
+
+      val workerController2Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController2Probe.ref)
+      awaitWorkersRegistered(workPullingController, 2)
+
+      workerController1Probe.stop()
+      awaitWorkersRegistered(workPullingController, 1)
+      replyProbe.expectNoMessage()
+
+      // msg-3 and msg-4 were not confirmed and should be resent to another worker
+      val seqMsg3 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg3.msg should ===(TestConsumer.Job("msg-3"))
+      seqMsg3.seqNr should ===(1)
+      seqMsg3.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      replyProbe.receiveMessage()
+
+      workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
+        TestConsumer.Job("msg-4"))
+      seqMsg3.producer ! ProducerController.Internal.Ack(2L)
+      replyProbe.receiveMessage()
+
+      workerController2Probe.stop()
+      awaitWorkersRegistered(workPullingController, 0)
       testKit.stop(workPullingController)
     }
 
