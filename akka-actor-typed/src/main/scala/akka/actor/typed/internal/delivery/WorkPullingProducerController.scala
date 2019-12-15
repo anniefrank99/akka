@@ -222,14 +222,20 @@ class WorkPullingProducerController[A: ClassTag](
         newPendingReplies: Vector[(Long, ActorRef[Long])]): Behavior[InternalCommand] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
       context.log.infoN(
-        "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}]",
+        "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}]",
         msg,
         wasStashed,
-        consumersWithDemand.map(_._1).mkString(", "))
+        consumersWithDemand.map(_._1).mkString(", "),
+        s.hasRequested)
+      if (!s.hasRequested && !wasStashed)
+        throw new IllegalStateException(s"Unexpected Msg [{}], wasn't requested nor unstashed.")
+
       if (consumersWithDemand.isEmpty) {
+        // out was deregistered
         context.log.info("Stash [{}]", msg)
         stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
-        active(s.copy(pendingReplies = newPendingReplies))
+        val newRequested = if (wasStashed) s.hasRequested else false
+        active(s.copy(pendingReplies = newPendingReplies, hasRequested = newRequested))
       } else {
         val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
         val (outKey, out) = consumersWithDemand(i)
@@ -243,18 +249,41 @@ class WorkPullingProducerController[A: ClassTag](
           case Failure(exc)   => throw exc // FIXME what to do for AskTimeout?
         }
 
+        def tellRequestNext(): Unit = {
+          context.log.info("RequestNext after Msg [{}]", msg)
+          producer ! requestNext
+        }
+
         val hasMoreDemand = consumersWithDemand.size >= 2
-        val requested =
-          if (hasMoreDemand && (!wasStashed || stashBuffer.isEmpty)) {
-            context.log.info("RequestNext after Msg [{}]", msg)
-            producer ! requestNext
+        // decision table based on s.hasRequested, wasStashed, hasMoreDemand, stashBuffer.isEmpty
+        val newRequested =
+          if (s.hasRequested && !wasStashed && hasMoreDemand) {
+            // request immediately since more demand
+            tellRequestNext()
             true
-          } else if (wasStashed) {
-            s.hasRequested
-          } else {
+          } else if (s.hasRequested && !wasStashed && !hasMoreDemand) {
+            // wait until more demand
             false
+          } else if (!s.hasRequested && wasStashed && hasMoreDemand && stashBuffer.isEmpty) {
+            // msg was unstashed, the last from stash
+            tellRequestNext()
+            true
+          } else if (!s.hasRequested && wasStashed && hasMoreDemand && stashBuffer.nonEmpty) {
+            // more in stash
+            false
+          } else if (!s.hasRequested && wasStashed && !hasMoreDemand) {
+            // wait until more demand
+            false
+          } else if (s.hasRequested && wasStashed) {
+            // msg was unstashed, but pending request alread in progress
+            true
+          } else {
+            throw new IllegalStateException(
+              s"Invalid combination of hasRequested [${s.hasRequested}], " +
+              s"wasStashed [$wasStashed], hasMoreDemand [$hasMoreDemand], stashBuffer.isEmpty [${stashBuffer.isEmpty}]")
           }
-        active(s.copy(out = newOut, hasRequested = requested, pendingReplies = newPendingReplies))
+
+        active(s.copy(out = newOut, hasRequested = newRequested, pendingReplies = newPendingReplies))
       }
     }
 
@@ -398,7 +427,7 @@ class WorkPullingProducerController[A: ClassTag](
                   .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, askNextTo = Some(next.askNextTo)))
 
             if (stashBuffer.nonEmpty) {
-              context.log.info("Unstash [{}]", stashBuffer.size)
+              context.log.info2("Unstash [{}] after WorkerRequestNext from [{}]", stashBuffer.size, w.next.producerId)
               stashBuffer.unstashAll(active(s.copy(out = newOut)))
             } else if (s.hasRequested) {
               active(s.copy(out = newOut))
