@@ -431,13 +431,26 @@ private class ProducerController[A: ClassTag](
           resendUnconfirmed(newUnconfirmed)
         }
 
-        if (newRequestedSeqNr > s.requestedSeqNr) {
-          if (!s.requested && (newRequestedSeqNr - s.currentSeqNr) > 0)
+        // when supportResend=false the requestedSeqNr window must be expanded if all sent messages were lost
+        val newRequestedSeqNr2 =
+          if (!supportResend && newRequestedSeqNr <= stateAfterAck.currentSeqNr)
+            stateAfterAck.currentSeqNr + (newRequestedSeqNr - newConfirmedSeqNr)
+          else
+            newRequestedSeqNr
+        if (newRequestedSeqNr2 != newRequestedSeqNr)
+          ctx.log.infoN(
+            "Expanded requestedSeqNr from [{}] to [{}], because current [{}] and all were probably lost",
+            newRequestedSeqNr,
+            newRequestedSeqNr2,
+            stateAfterAck.currentSeqNr)
+
+        if (newRequestedSeqNr2 > s.requestedSeqNr) {
+          if (!s.requested && (newRequestedSeqNr2 - s.currentSeqNr) > 0)
             s.producer ! RequestNext(producerId, s.currentSeqNr, newConfirmedSeqNr, msgAdapter, ctx.self)
           active(
             stateAfterAck.copy(
               requested = true,
-              requestedSeqNr = newRequestedSeqNr,
+              requestedSeqNr = newRequestedSeqNr2,
               supportResend = supportResend,
               unconfirmed = newUnconfirmed))
         } else {
