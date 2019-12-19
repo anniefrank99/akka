@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 import scala.concurrent.duration._
 
+import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
@@ -95,7 +96,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike
       system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
       awaitWorkersRegistered(workPullingController, 1)
 
-      val replyProbe = createTestProbe[Long]()
+      val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
@@ -156,7 +157,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike
         stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Vector.empty))
       }
 
-      val replyTo = createTestProbe[Long]()
+      val replyTo = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
       workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)

@@ -6,6 +6,7 @@ package akka.actor.typed.internal.delivery
 
 import scala.concurrent.duration._
 
+import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
@@ -138,7 +139,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
       awaitWorkersRegistered(workPullingController, 1)
 
-      val replyProbe = createTestProbe[Long]()
+      val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
@@ -180,7 +181,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with L
       system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
       awaitWorkersRegistered(workPullingController, 1)
 
-      val replyProbe = createTestProbe[Long]()
+      val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)

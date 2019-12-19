@@ -11,6 +11,7 @@ import scala.reflect.ClassTag
 import scala.util.Failure
 import scala.util.Success
 
+import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.receptionist.Receptionist
@@ -35,7 +36,7 @@ object WorkPullingProducerController {
    * For sending confirmation message back to the producer when the message has been fully delivered, processed,
    * and confirmed by the consumer. Typically used with `ask` from the producer.
    */
-  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
+  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Done]) extends InternalCommand
 
   final case class GetWorkerStats[A](replyTo: ActorRef[WorkerStats]) extends Command[A]
 
@@ -63,7 +64,7 @@ object WorkPullingProducerController {
       unconfirmed: Vector[Unconfirmed[A]],
       askNextTo: Option[ActorRef[ProducerController.MessageWithConfirmation[A]]])
 
-  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, msg: A, replyTo: Option[ActorRef[Long]])
+  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, msg: A, replyTo: Option[ActorRef[Done]])
 
   private object State {
     def empty[A]: State[A] = State(1, Set.empty, Map.empty, Vector.empty, 0, hasRequested = false)
@@ -74,7 +75,7 @@ object WorkPullingProducerController {
       workers: Set[ActorRef[ConsumerController.Command[A]]],
       out: Map[String, OutState[A]],
       // pendingReplies is used when durableQueue is enabled, otherwise they are tracked in OutState
-      pendingReplies: Vector[(Long, ActorRef[Long])],
+      pendingReplies: Vector[(Long, ActorRef[Done])],
       producerIdCount: Long,
       hasRequested: Boolean)
 
@@ -82,7 +83,7 @@ object WorkPullingProducerController {
   private final case class CurrentWorkers[A](workers: Set[ActorRef[ConsumerController.Command[A]]])
       extends InternalCommand
 
-  private final case class Msg[A](msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Long]]) extends InternalCommand
+  private final case class Msg[A](msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Done]]) extends InternalCommand
 
   def apply[A: ClassTag](
       producerId: String,
@@ -217,9 +218,9 @@ class WorkPullingProducerController[A: ClassTag](
     def onMessage(
         msg: A,
         wasStashed: Boolean,
-        replyTo: Option[ActorRef[Long]],
+        replyTo: Option[ActorRef[Done]],
         totalSeqNr: Long,
-        newPendingReplies: Vector[(Long, ActorRef[Long])]): Behavior[InternalCommand] = {
+        newPendingReplies: Vector[(Long, ActorRef[Done])]): Behavior[InternalCommand] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
       context.log.infoN(
         "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}]",
@@ -305,7 +306,7 @@ class WorkPullingProducerController[A: ClassTag](
         confirmed.foreach {
           case Unconfirmed(_, _, _, None) => // no reply
           case Unconfirmed(_, _, _, Some(replyTo)) =>
-            replyTo ! -1 // FIXME use another global seqNr counter or reply with Done
+            replyTo ! Done
         }
 
         durableQueue.foreach { d =>
@@ -345,7 +346,7 @@ class WorkPullingProducerController[A: ClassTag](
             if (headSeqNr != seqNr)
               throw new IllegalStateException(s"Unexpected pending reply [$headSeqNr] after storage of [$seqNr].")
             context.log.info("Confirmation reply to [{}] after storage", seqNr)
-            replyTo ! seqNr
+            replyTo ! Done
             s.pendingReplies.tail
           }
 
