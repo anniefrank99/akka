@@ -322,6 +322,49 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike
       consumerProbe1.stop()
       createTestProbe().expectTerminated(consumerController)
     }
+
+    "handle first message when waiting for lost (resending)" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      // not first, will be stashed
+      consumerController ! sequencedMessage(producerId, 44, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 41, producerControllerProbe.ref)
+        .copy(first = true)(producerControllerProbe.ref)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 60, true, false))
+      // 44 not expected, and stashed 41 not received yet
+      producerControllerProbe.expectMessage(ProducerController.Internal.Resend(1))
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(41)
+      consumerController ! ConsumerController.Confirmed(41)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(41, 60, true, false))
+
+      // from previous Resend request
+      consumerController ! sequencedMessage(producerId, 41, producerControllerProbe.ref)
+        .copy(first = true)(producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 42, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 43, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 44, producerControllerProbe.ref)
+
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(42)
+      consumerController ! ConsumerController.Confirmed(42)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(43)
+      consumerController ! ConsumerController.Confirmed(43)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(44)
+      consumerController ! ConsumerController.Confirmed(44)
+
+      consumerController ! sequencedMessage(producerId, 45, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(45)
+      consumerController ! ConsumerController.Confirmed(45)
+
+      testKit.stop(consumerController)
+    }
   }
 
   "ConsumerController without resending" must {

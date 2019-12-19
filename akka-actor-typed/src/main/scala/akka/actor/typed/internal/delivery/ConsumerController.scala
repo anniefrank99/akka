@@ -200,7 +200,7 @@ private class ConsumerController[A](
         checkProducerId(producerId, pid, seqNr)
 
         val expectedSeqNr = s.receivedSeqNr + 1
-        if (seqNr == expectedSeqNr || (seqMsg.first && seqNr >= expectedSeqNr) || (seqMsg.first && seqMsg.producer != s.producer)) {
+        if (isExpected(s, seqMsg)) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
           waitingForConfirmation(
@@ -246,7 +246,13 @@ private class ConsumerController[A](
     }
   }
 
-  // It has detected a missing seqNr and requested a Resend. Expecting a SequencedMessage from the
+  private def isExpected(s: State[A], seqMsg: SequencedMessage[A]): Boolean = {
+    val expectedSeqNr = s.receivedSeqNr + 1
+    seqMsg.seqNr == expectedSeqNr ||
+    (seqMsg.first && seqMsg.seqNr >= expectedSeqNr) ||
+    (seqMsg.first && seqMsg.producer != s.producer)
+  }
+// It has detected a missing seqNr and requested a Resend. Expecting a SequencedMessage from the
   // ProducerController with the missing seqNr. Other SequencedMessage with different seqNr will be
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State[A]): Behavior[InternalCommand] = {
@@ -256,10 +262,13 @@ private class ConsumerController[A](
         val seqNr = seqMsg.seqNr
         checkProducerId(producerId, pid, seqNr)
 
-        // FIXME is SequencedMessage.first possible here?
-        if (seqNr == s.receivedSeqNr + 1) {
+        if (isExpected(s, seqMsg)) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
-          context.log.info("from producer [{}], received missing [{}]", pid, seqNr)
+          context.log.infoN(
+            "from producer [{}], received {} [{}]",
+            pid,
+            if (seqMsg.first) "first" else "missing",
+            seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
           waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), seqMsg)
         } else {
