@@ -79,8 +79,13 @@ object ProducerController {
   final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
 
   /**
-   * For sending confirmation message back to the producer when the message has been fully delivered, processed,
-   * and confirmed by the consumer. Typically used with `ask` from the producer.
+   * For sending confirmation message back to the producer when the message has been confirmed.
+   * Typically used with `ask` from the producer.
+   *
+   * If `DurableProducerQueue` is used the confirmation reply is sent when the message has been
+   * successfully stored, meaning that the actual delivery to the consumer may happen later.
+   * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
+   * fully delivered, processed, and confirmed by the consumer.
    */
   final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
 

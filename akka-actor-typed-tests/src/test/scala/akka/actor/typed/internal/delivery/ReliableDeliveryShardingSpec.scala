@@ -6,6 +6,7 @@ package akka.actor.typed.internal.delivery
 
 import scala.concurrent.duration._
 
+import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
@@ -149,6 +150,53 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
       testKit.stop(producer2)
       testKit.stop(shardingController1)
       testKit.stop(shardingController2)
+      testKit.stop(sharding)
+    }
+
+    "reply to MessageWithConfirmation" in {
+      nextId()
+      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+      val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
+        spawn(
+          SimuatedSharding(
+            _ =>
+              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
+                c => TestConsumer(defaultConsumerDelay, 3, consumerEndProbe.ref, c),
+                resendLost = true)),
+          s"sharding-$idCount")
+
+      val shardingController =
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding), s"shardingController-$idCount")
+
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingController ! ShardingProducerController.Start(producerProbe.ref)
+
+      val replyProbe = createTestProbe[Done]()
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-0", TestConsumer.Job("msg-1")),
+        replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-0", TestConsumer.Job("msg-2")),
+        replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")),
+        replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-0", TestConsumer.Job("msg-4")),
+        replyProbe.ref)
+
+      consumerEndProbe.receiveMessage() // entity-0 received 3 messages
+      consumerEndProbe.expectNoMessage()
+
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")),
+        replyProbe.ref)
+      producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
+        ShardingEnvelope("entity-1", TestConsumer.Job("msg-6")),
+        replyProbe.ref)
+      consumerEndProbe.receiveMessage() // entity-0 received 3 messages
+
+      testKit.stop(shardingController)
       testKit.stop(sharding)
     }
 
