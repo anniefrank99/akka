@@ -14,8 +14,6 @@ import akka.actor.typed.scaladsl.Behaviors
 
 // FIXME this will be moved to akka-cluster-sharding-typed
 
-// FIXME there should also be a ShardingConsumerController, see TestShardingConsumer in ReliableDeliverySpec
-
 object ShardingProducerController {
 
   sealed trait InternalCommand
@@ -24,6 +22,8 @@ object ShardingProducerController {
 
   final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
 
+  // FIXME askNextTo: ActorRef[MessageWithConfirmation[ShardingEnvelope[A]]]
+  // FIXME include Set(entityId) that have demand in requestNext message? Include number of buffered per entityId.
   final case class RequestNext[A](sendNextTo: ActorRef[ShardingEnvelope[A]])
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
@@ -93,7 +93,7 @@ class ShardingProducerController[A: ClassTag](
               val newProducers =
                 s.out.updated(outKey, out.copy(sendNextTo = Some(next.sendNextTo)))
               if (!s.hasRequested)
-                producer ! requestNext // FIXME way to include entityId in requestNext message?
+                producer ! requestNext
               active(s.copy(newProducers, hasRequested = true))
             }
 
@@ -123,7 +123,7 @@ class ShardingProducerController[A: ClassTag](
               s.out.updated(outKey, OutState(p, None, Vector(msg)))
           }
 
-        // FIXME some way to limit the pending buffers
+        // FIXME some way to limit the pending buffers.
         val hasMoreDemand = newProducers.valuesIterator.exists(_.sendNextTo.nonEmpty)
         if (hasMoreDemand)
           producer ! requestNext

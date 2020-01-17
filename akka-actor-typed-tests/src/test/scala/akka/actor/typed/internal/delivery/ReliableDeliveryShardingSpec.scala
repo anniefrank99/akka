@@ -10,7 +10,6 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
-import akka.actor.typed.Terminated
 import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
 import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
 import akka.actor.typed.scaladsl.Behaviors
@@ -66,52 +65,6 @@ object ReliableDeliveryShardingSpec {
 
   }
 
-  // FIXME some of this should also become part of Akka
-  object TestShardingConsumer {
-    def apply(delay: FiniteDuration, endSeqNr: Long, endReplyTo: ActorRef[TestConsumer.CollectedProducerIds])
-        : Behavior[ConsumerController.SequencedMessage[TestConsumer.Job]] =
-      apply(delay, TestConsumer.consumerEndCondition(endSeqNr), endReplyTo)
-
-    def apply(
-        delay: FiniteDuration,
-        endCondition: TestConsumer.SomeAsyncJob => Boolean,
-        endReplyTo: ActorRef[TestConsumer.CollectedProducerIds])
-        : Behavior[ConsumerController.SequencedMessage[TestConsumer.Job]] = {
-      Behaviors.setup { context =>
-        context.setLoggerName("TestShardingConsumer")
-        val consumer = context.spawn(TestConsumer(delay, endCondition, endReplyTo), name = "consumer")
-        // if consumer terminates this actor will also terminate
-        context.watch(consumer)
-        active(consumer, Map.empty)
-      }
-    }
-
-    private def active(
-        consumer: ActorRef[TestConsumer.Command],
-        controllers: Map[String, ActorRef[ConsumerController.Command[TestConsumer.Job]]])
-        : Behavior[ConsumerController.SequencedMessage[TestConsumer.Job]] = {
-      Behaviors
-        .receive[ConsumerController.SequencedMessage[TestConsumer.Job]] { (ctx, msg) =>
-          controllers.get(msg.producerId) match {
-            case Some(c) =>
-              c ! msg
-              Behaviors.same
-            case None =>
-              val c = ctx.spawn(
-                ConsumerController[TestConsumer.Job](resendLost = true),
-                s"consumerController-${msg.producerId}")
-              // FIXME watch msg.producerController to cleanup terminated producers
-              consumer ! TestConsumer.AddConsumerController(c)
-              c ! msg
-              active(consumer, controllers.updated(msg.producerId, c))
-          }
-        }
-        .receiveSignal {
-          case (_, Terminated(_)) =>
-            Behaviors.stopped
-        }
-    }
-  }
 }
 
 class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
@@ -133,12 +86,16 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
         spawn(
-          SimuatedSharding(_ => TestShardingConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref)),
-          s"sharding-${idCount}")
+          SimuatedSharding(
+            _ =>
+              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
+                c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
+                resendLost = true)),
+          s"sharding-$idCount")
 
       val shardingController =
-        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding), s"shardingController-${idCount}")
-      val producer = spawn(TestShardingProducer(shardingController), name = s"shardingProducer-${idCount}")
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding), s"shardingController-$idCount")
+      val producer = spawn(TestShardingProducer(shardingController), name = s"shardingProducer-$idCount")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
       consumerEndProbe.receiveMessages(3, 5.seconds)
@@ -153,36 +110,40 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
         spawn(
-          SimuatedSharding(_ => TestShardingConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref)),
-          s"sharding-${idCount}")
+          SimuatedSharding(
+            _ =>
+              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
+                c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
+                resendLost = true)),
+          s"sharding-$idCount")
 
       val shardingController1 =
         spawn(
           ShardingProducerController[TestConsumer.Job](
-            s"p1-${idCount}", // note different producerId
+            s"p1-$idCount", // note different producerId
             sharding),
-          s"shardingController1-${idCount}")
-      val producer1 = spawn(TestShardingProducer(shardingController1), name = s"shardingProducer1-${idCount}")
+          s"shardingController1-$idCount")
+      val producer1 = spawn(TestShardingProducer(shardingController1), name = s"shardingProducer1-$idCount")
 
       val shardingController2 =
         spawn(
           ShardingProducerController[TestConsumer.Job](
-            s"p2-${idCount}", // note different producerId
+            s"p2-$idCount", // note different producerId
             sharding),
-          s"shardingController2-${idCount}")
-      val producer2 = spawn(TestShardingProducer(shardingController2), name = s"shardingProducer2-${idCount}")
+          s"shardingController2-$idCount")
+      val producer2 = spawn(TestShardingProducer(shardingController2), name = s"shardingProducer2-$idCount")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
       val endMessages = consumerEndProbe.receiveMessages(3, 5.seconds)
       // verify that they received messages from both producers
       endMessages.flatMap(_.producerIds).toSet should ===(
         Set(
-          s"p1-${idCount}-entity-0",
-          s"p1-${idCount}-entity-1",
-          s"p1-${idCount}-entity-2",
-          s"p2-${idCount}-entity-0",
-          s"p2-${idCount}-entity-1",
-          s"p2-${idCount}-entity-2"))
+          s"p1-$idCount-entity-0",
+          s"p1-$idCount-entity-1",
+          s"p1-$idCount-entity-2",
+          s"p2-$idCount-entity-0",
+          s"p2-$idCount-entity-1",
+          s"p2-$idCount-entity-2"))
 
       testKit.stop(producer1)
       testKit.stop(producer2)

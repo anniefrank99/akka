@@ -33,9 +33,6 @@ object TestConsumer {
 
   final case class CollectedProducerIds(producerIds: Set[String])
 
-  final case class AddConsumerController(controller: ActorRef[ConsumerController.Start[TestConsumer.Job]])
-      extends Command
-
   val defaultConsumerDelay: FiniteDuration = 10.millis
 
   def sequencedMessage(
@@ -64,31 +61,25 @@ object TestConsumer {
       endReplyTo: ActorRef[CollectedProducerIds],
       controller: ActorRef[ConsumerController.Start[TestConsumer.Job]]): Behavior[Command] =
     Behaviors.setup[Command] { ctx =>
-      ctx.self ! AddConsumerController(controller)
-      new TestConsumer(ctx, delay, endCondition, endReplyTo).active(Set.empty)
+      new TestConsumer(ctx, delay, endCondition, endReplyTo, controller).active(Set.empty)
     }
 
-  // dynamically adding ConsumerController via message AddConsumerController
-  def apply(
-      delay: FiniteDuration,
-      endCondition: SomeAsyncJob => Boolean,
-      endReplyTo: ActorRef[CollectedProducerIds]): Behavior[Command] =
-    Behaviors.setup[Command] { ctx =>
-      new TestConsumer(ctx, delay, endCondition, endReplyTo).active(Set.empty)
-    }
 }
 
 class TestConsumer(
     ctx: ActorContext[TestConsumer.Command],
     delay: FiniteDuration,
     endCondition: TestConsumer.SomeAsyncJob => Boolean,
-    endReplyTo: ActorRef[TestConsumer.CollectedProducerIds]) {
+    endReplyTo: ActorRef[TestConsumer.CollectedProducerIds],
+    controller: ActorRef[ConsumerController.Start[TestConsumer.Job]]) {
   import TestConsumer._
 
   ctx.setLoggerName("TestConsumer")
 
   private val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
     ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
+
+  controller ! ConsumerController.Start(deliverTo)
 
   private def active(processed: Set[(String, Long)]): Behavior[Command] = {
     Behaviors.receive { (ctx, m) =>
@@ -117,10 +108,6 @@ class TestConsumer(
             Behaviors.stopped
           } else
             active(cleanProcessed + (producerId -> seqNr))
-
-        case AddConsumerController(controller) =>
-          controller ! ConsumerController.Start(deliverTo)
-          Behaviors.same
       }
     }
   }
