@@ -59,7 +59,8 @@ object ReliableDeliveryShardingSpec {
             idle(n)
 
           case RequestNext(_) =>
-            throw new IllegalStateException("Unexpected RequestNext, already got one.")
+            // already active
+            Behaviors.same
         }
       }
     }
@@ -198,6 +199,89 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       testKit.stop(shardingController)
       testKit.stop(sharding)
+    }
+
+    "include demand information in RequestNext" in {
+      nextId()
+
+      val shardingProbe =
+        createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
+      val shardingProducerController =
+        spawn(
+          ShardingProducerController[TestConsumer.Job](producerId, shardingProbe.ref),
+          s"shardingController-$idCount")
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
+
+      val next1 = producerProbe.receiveMessage()
+      next1.entitiesWithDemand should ===(Set.empty)
+      next1.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      next1.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
+      // for the first message no RequestNext until initial roundtrip
+      producerProbe.expectNoMessage()
+
+      val seq1 = shardingProbe.receiveMessage().message
+      seq1.msg should ===(TestConsumer.Job("msg-1"))
+      seq1.producer ! ProducerController.Internal.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+
+      val next2 = producerProbe.receiveMessage()
+      next2.entitiesWithDemand should ===(Set("entity-1"))
+      next2.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      next2.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
+      val next3 = producerProbe.receiveMessage()
+      // could be sent immediately since had demand, and Request(upToSeqNr-5)
+      next3.entitiesWithDemand should ===(Set("entity-1"))
+      next3.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      next3.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
+      val next4 = producerProbe.receiveMessage()
+      next4.entitiesWithDemand should ===(Set("entity-1"))
+      next4.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      next4.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-4"))
+      val next5 = producerProbe.receiveMessage()
+      next5.entitiesWithDemand should ===(Set("entity-1"))
+      next5.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-5"))
+      // no more demand Request(upToSeqNr-5)
+      producerProbe.expectNoMessage()
+      // but we can anyway send more, which will be buffered
+      next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-6"))
+
+      shardingProbe.receiveMessage()
+      shardingProbe.receiveMessage()
+      shardingProbe.receiveMessage()
+      val seq5 = shardingProbe.receiveMessage().message
+      seq5.msg should ===(TestConsumer.Job("msg-5"))
+
+      val next6 = producerProbe.receiveMessage()
+      next6.entitiesWithDemand should ===(Set.empty)
+      next6.bufferedForEntitesWithoutDemand should ===(Map("entity-1" -> 1))
+
+      // and we can send to another entity
+      next6.sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-7"))
+      producerProbe.expectNoMessage()
+      val seq7 = shardingProbe.receiveMessage().message
+      seq7.msg should ===(TestConsumer.Job("msg-7"))
+      seq7.producer ! ProducerController.Internal.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+
+      val next8 = producerProbe.receiveMessage()
+      next8.entitiesWithDemand should ===(Set("entity-2"))
+      next8.bufferedForEntitesWithoutDemand should ===(Map("entity-1" -> 1))
+
+      // when new demand the buffered messages will be be sent
+      seq5.producer ! ProducerController.Internal.Request(confirmedSeqNr = 5L, upToSeqNr = 10, true, false)
+      val seq6 = shardingProbe.receiveMessage().message
+      seq6.msg should ===(TestConsumer.Job("msg-6"))
+
+      val next9 = producerProbe.receiveMessage()
+      next9.entitiesWithDemand should ===(Set("entity-1", "entity-2"))
+      next9.bufferedForEntitesWithoutDemand should ===(Map.empty)
+
+      testKit.stop(shardingProducerController)
     }
 
   }

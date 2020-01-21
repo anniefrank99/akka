@@ -449,6 +449,8 @@ class WorkPullingProducerController[A: ClassTag](
       case RegisterConsumerDone =>
         Behaviors.same
 
+      // FIXME case Start register of new produce, e.g. restart
+
     }
   }
 }

@@ -41,25 +41,26 @@ object ShardingProducerController {
 
   private final case class Ack(replyTo: ActorRef[Done]) extends InternalCommand
 
-  // FIXME include Set(entityId) that have demand in requestNext message? Include number of buffered per entityId.
   final case class RequestNext[A](
       sendNextTo: ActorRef[ShardingEnvelope[A]],
-      askNextTo: ActorRef[MessageWithConfirmation[A]])
+      askNextTo: ActorRef[MessageWithConfirmation[A]],
+      entitiesWithDemand: Set[String],
+      bufferedForEntitesWithoutDemand: Map[String, Int])
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
   private final case class Msg[A](msg: ShardingEnvelope[A]) extends InternalCommand
 
   private final case class OutState[A](
+      entityId: String,
       producerController: ActorRef[ProducerController.Command[A]],
       nextTo: Option[ProducerController.RequestNext[A]],
-      // FIXME use better Queue than Vector for this
       pending: Vector[(A, Option[ActorRef[Done]])]) {
     if (nextTo.nonEmpty && pending.nonEmpty)
       throw new IllegalStateException("nextTo and pending shouldn't both be nonEmpty.")
   }
 
-  private final case class State[A](out: Map[String, OutState[A]], hasRequested: Boolean)
+  private final case class State[A](out: Map[String, OutState[A]])
 
   def apply[A: ClassTag](
       producerId: String,
@@ -70,10 +71,9 @@ object ShardingProducerController {
         Behaviors.receiveMessagePartial {
           case start: Start[A] @unchecked =>
             val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg))
-            val requestNext = RequestNext(msgAdapter, context.self)
-            start.producer ! requestNext
-            new ShardingProducerController(context, producerId, start.producer, requestNext, region)
-              .active(State(Map.empty, hasRequested = false))
+            start.producer ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
+            new ShardingProducerController(context, producerId, start.producer, msgAdapter, region)
+              .active(State(Map.empty))
         }
       }
       .narrow
@@ -85,7 +85,7 @@ class ShardingProducerController[A: ClassTag](
     context: ActorContext[ShardingProducerController.InternalCommand],
     producerId: String,
     producer: ActorRef[ShardingProducerController.RequestNext[A]],
-    requestNext: ShardingProducerController.RequestNext[A],
+    msgAdapter: ActorRef[ShardingEnvelope[A]],
     region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]]) {
   import ShardingProducerController._
 
@@ -96,14 +96,18 @@ class ShardingProducerController[A: ClassTag](
 
     def onMsg(entityId: String, msg: A, replyTo: Option[ActorRef[Done]]): Behavior[InternalCommand] = {
       val outKey = s"$producerId-$entityId"
-      val newProducers =
+      val newState =
         s.out.get(outKey) match {
-          case Some(out @ OutState(_, Some(nextTo), _)) =>
+          case Some(out @ OutState(_, _, Some(nextTo), _)) =>
             send(msg, replyTo, nextTo)
-            s.out.updated(outKey, out.copy(nextTo = None))
-          case Some(out @ OutState(_, None, pending)) =>
+            s.copy(s.out.updated(outKey, out.copy(nextTo = None)))
+          case Some(out @ OutState(_, _, None, pending)) =>
+            // FIXME limit the pending buffers.
             context.log.info("Buffering message to entityId [{}], buffer size [{}]", entityId, pending.size + 1)
-            s.out.updated(outKey, out.copy(pending = pending :+ msg -> replyTo))
+            // send an updated RequestNext to indicate buffer usage
+            val newS = s.copy(s.out.updated(outKey, out.copy(pending = pending :+ msg -> replyTo)))
+            producer ! createRequestNext(newS)
+            newS
           case None =>
             context.log.info("Creating ProducerController for entity [{}]", entityId)
             val send: ConsumerController.SequencedMessage[A] => Unit = { seqMsg =>
@@ -112,14 +116,10 @@ class ShardingProducerController[A: ClassTag](
             // FIXME support DurableProducerQueue
             val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None, send), entityId)
             p ! ProducerController.Start(requestNextAdapter)
-            s.out.updated(outKey, OutState(p, None, Vector(msg -> replyTo)))
+            s.copy(s.out.updated(outKey, OutState(entityId, p, None, Vector(msg -> replyTo))))
         }
 
-      // FIXME some way to limit the pending buffers.
-      val hasMoreDemand = newProducers.valuesIterator.exists(_.nextTo.nonEmpty)
-      if (hasMoreDemand)
-        producer ! requestNext
-      active(s.copy(newProducers, hasMoreDemand))
+      active(newState)
     }
 
     Behaviors.receiveMessage {
@@ -140,9 +140,10 @@ class ShardingProducerController[A: ClassTag](
             } else {
               val newProducers =
                 s.out.updated(outKey, out.copy(nextTo = Some(next)))
-              if (!s.hasRequested)
-                producer ! requestNext
-              active(s.copy(newProducers, hasRequested = true))
+              val newState = s.copy(newProducers)
+              // send an updated RequestNext
+              producer ! createRequestNext(newState)
+              active(newState)
             }
 
           case None =>
@@ -159,7 +160,17 @@ class ShardingProducerController[A: ClassTag](
       case Ack(replyTo) =>
         replyTo ! Done
         Behaviors.same
+
+      // FIXME case Start register of new produce, e.g. restart
     }
+  }
+
+  private def createRequestNext(s: State[A]) = {
+    val entitiesWithDemand = s.out.valuesIterator.collect { case out if out.nextTo.nonEmpty => out.entityId }.toSet
+    val bufferedForEntitesWithoutDemand = s.out.valuesIterator.collect {
+      case out if out.nextTo.isEmpty => out.entityId -> out.pending.size
+    }.toMap
+    RequestNext(msgAdapter, context.self, entitiesWithDemand, bufferedForEntitesWithoutDemand)
   }
 
   private def send(msg: A, replyTo: Option[ActorRef[Done]], nextTo: ProducerController.RequestNext[A]): Unit = {
