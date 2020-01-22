@@ -15,6 +15,7 @@ import akka.actor.typed.Behavior
 import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.scaladsl.StashBuffer
 import akka.util.Timeout
 
 // FIXME this will be moved to akka-cluster-sharding-typed
@@ -39,44 +40,168 @@ object ShardingProducerController {
   final case class MessageWithConfirmation[A](entityId: String, message: A, replyTo: ActorRef[Done])
       extends InternalCommand
 
-  private final case class Ack(replyTo: ActorRef[Done]) extends InternalCommand
+  private final case class Ack(outKey: String, confirmedSeqNr: Long) extends InternalCommand
 
   final case class RequestNext[A](
       sendNextTo: ActorRef[ShardingEnvelope[A]],
       askNextTo: ActorRef[MessageWithConfirmation[A]],
       entitiesWithDemand: Set[String],
-      bufferedForEntitesWithoutDemand: Map[String, Int])
+      bufferedForEntitiesWithoutDemand: Map[String, Int])
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
-  private final case class Msg[A](msg: ShardingEnvelope[A]) extends InternalCommand
+  private final case class Msg[A](envelope: ShardingEnvelope[A], replyTo: Option[ActorRef[Done]])
+      extends InternalCommand
+
+  private case class LoadStateReply[A](state: DurableProducerQueue.State[A]) extends InternalCommand
+  private case class LoadStateFailed(attempt: Int) extends InternalCommand
+  private case class StoreMessageSentReply(ack: DurableProducerQueue.StoreMessageSentAck)
+  private case class StoreMessageSentFailed[A](messageSent: DurableProducerQueue.MessageSent[A], attempt: Int)
+      extends InternalCommand
+  private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
+      extends InternalCommand
 
   private final case class OutState[A](
       entityId: String,
       producerController: ActorRef[ProducerController.Command[A]],
       nextTo: Option[ProducerController.RequestNext[A]],
-      pending: Vector[(A, Option[ActorRef[Done]])]) {
-    if (nextTo.nonEmpty && pending.nonEmpty)
-      throw new IllegalStateException("nextTo and pending shouldn't both be nonEmpty.")
+      buffered: Vector[Buffered[A]],
+      seqNr: Long,
+      unconfirmed: Vector[Unconfirmed[A]]) {
+    if (nextTo.nonEmpty && buffered.nonEmpty)
+      throw new IllegalStateException("nextTo and buffered shouldn't both be nonEmpty.")
   }
 
-  private final case class State[A](out: Map[String, OutState[A]])
+  private final case class Buffered[A](totalSeqNr: Long, msg: A, replyTo: Option[ActorRef[Done]])
+
+  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, replyTo: Option[ActorRef[Done]])
+
+  private final case class State[A](
+      currentSeqNr: Long,
+      out: Map[String, OutState[A]],
+      // pendingReplies is used when durableQueue is enabled, otherwise they are tracked in OutState
+      pendingReplies: Vector[(Long, ActorRef[Done])])
 
   def apply[A: ClassTag](
       producerId: String,
-      region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]]): Behavior[Command[A]] = {
+      region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[ShardingEnvelope[A]]]])
+      : Behavior[Command[A]] = {
     Behaviors
-      .setup[InternalCommand] { context =>
-        context.setLoggerName(classOf[ShardingProducerController[_]])
-        Behaviors.receiveMessagePartial {
-          case start: Start[A] @unchecked =>
-            val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg))
-            start.producer ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
-            new ShardingProducerController(context, producerId, start.producer, msgAdapter, region)
-              .active(State(Map.empty))
+      .withStash[InternalCommand](1000) { stashBuffer => // FIXME stash config
+        Behaviors.setup[InternalCommand] { context =>
+          context.setLoggerName(classOf[ShardingProducerController[_]])
+
+          val durableQueue = askLoadState(context, durableQueueBehavior)
+
+          waitingForStart(
+            producerId,
+            context,
+            stashBuffer,
+            region,
+            durableQueue,
+            None,
+            createInitialState(durableQueue.nonEmpty))
         }
       }
       .narrow
+  }
+
+  private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
+    if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[ShardingEnvelope[A]])
+  }
+
+  private def waitingForStart[A: ClassTag](
+      producerId: String,
+      context: ActorContext[InternalCommand],
+      stashBuffer: StashBuffer[InternalCommand],
+      region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[ShardingEnvelope[A]]]],
+      producer: Option[ActorRef[RequestNext[A]]],
+      initialState: Option[DurableProducerQueue.State[ShardingEnvelope[A]]]): Behavior[InternalCommand] = {
+
+    def becomeActive(
+        p: ActorRef[RequestNext[A]],
+        s: DurableProducerQueue.State[ShardingEnvelope[A]]): Behavior[InternalCommand] = {
+      // resend unconfirmed before other stashed messages
+      Behaviors.withStash[InternalCommand](1000) { newStashBuffer => // FIXME stash config
+        Behaviors.setup { _ =>
+          s.unconfirmed.foreach {
+            case DurableProducerQueue.MessageSent(_, envelope: ShardingEnvelope[A], _) =>
+              newStashBuffer.stash(Msg(envelope, replyTo = None))
+          }
+          // append other stashed messages after the unconfirmed
+          stashBuffer.foreach(newStashBuffer.stash)
+
+          val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, replyTo = None))
+          if (s.unconfirmed.isEmpty)
+            p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
+          val b = new ShardingProducerController(context, producerId, p, msgAdapter, region, durableQueue)
+            .active(State(s.currentSeqNr, Map.empty, Vector.empty))
+
+          newStashBuffer.unstashAll(b)
+        }
+      }
+    }
+
+    Behaviors.receiveMessage {
+      case start: Start[A] @unchecked =>
+        initialState match {
+          case Some(s) =>
+            becomeActive(start.producer, s)
+          case None =>
+            // waiting for LoadStateReply
+            waitingForStart(producerId, context, stashBuffer, region, durableQueue, Some(start.producer), initialState)
+        }
+
+      case load: LoadStateReply[ShardingEnvelope[A]] @unchecked =>
+        producer match {
+          case Some(p) =>
+            becomeActive(p, load.state)
+          case None =>
+            // waiting for LoadStateReply
+            waitingForStart(producerId, context, stashBuffer, region, durableQueue, producer, Some(load.state))
+        }
+
+      case LoadStateFailed(attempt) =>
+        // FIXME attempt counter, and give up
+        context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+        // retry
+        askLoadState(context, durableQueue, attempt + 1)
+        Behaviors.same
+
+      case other =>
+        stashBuffer.stash(other)
+        Behaviors.same
+    }
+  }
+
+  private def askLoadState[A: ClassTag](
+      context: ActorContext[InternalCommand],
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[ShardingEnvelope[A]]]])
+      : Option[ActorRef[DurableProducerQueue.Command[ShardingEnvelope[A]]]] = {
+
+    durableQueueBehavior.map { b =>
+      val ref = context.spawn(b, "durable")
+      context.watch(ref) // FIXME handle terminated, but it's not supposed to be restarted so death pact is alright
+      askLoadState(context, Some(ref), attempt = 1)
+      ref
+    }
+  }
+
+  private def askLoadState[A: ClassTag](
+      context: ActorContext[InternalCommand],
+      durableQueue: Option[ActorRef[DurableProducerQueue.Command[ShardingEnvelope[A]]]],
+      attempt: Int): Unit = {
+    implicit val loadTimeout: Timeout = 3.seconds // FIXME config
+    durableQueue.foreach { ref =>
+      context.ask[DurableProducerQueue.LoadState[ShardingEnvelope[A]], DurableProducerQueue.State[ShardingEnvelope[A]]](
+        ref,
+        askReplyTo => DurableProducerQueue.LoadState[ShardingEnvelope[A]](askReplyTo)) {
+        case Success(s) => LoadStateReply(s)
+        case Failure(_) => LoadStateFailed(attempt) // timeout
+      }
+    }
   }
 
 }
@@ -86,26 +211,44 @@ class ShardingProducerController[A: ClassTag](
     producerId: String,
     producer: ActorRef[ShardingProducerController.RequestNext[A]],
     msgAdapter: ActorRef[ShardingEnvelope[A]],
-    region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]]) {
+    region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
+    durableQueue: Option[ActorRef[DurableProducerQueue.Command[ShardingEnvelope[A]]]]) {
   import ShardingProducerController._
+  import DurableProducerQueue.StoreMessageSent
+  import DurableProducerQueue.StoreMessageSentAck
+  import DurableProducerQueue.StoreMessageConfirmed
+  import DurableProducerQueue.MessageSent
 
   private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WrappedRequestNext.apply)
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
-    def onMsg(entityId: String, msg: A, replyTo: Option[ActorRef[Done]]): Behavior[InternalCommand] = {
+    def onMessage(
+        entityId: String,
+        msg: A,
+        replyTo: Option[ActorRef[Done]],
+        totalSeqNr: Long,
+        newPendingReplies: Vector[(Long, ActorRef[Done])]): Behavior[InternalCommand] = {
+
       val outKey = s"$producerId-$entityId"
       val newState =
         s.out.get(outKey) match {
-          case Some(out @ OutState(_, _, Some(nextTo), _)) =>
-            send(msg, replyTo, nextTo)
-            s.copy(s.out.updated(outKey, out.copy(nextTo = None)))
-          case Some(out @ OutState(_, _, None, pending)) =>
-            // FIXME limit the pending buffers.
-            context.log.info("Buffering message to entityId [{}], buffer size [{}]", entityId, pending.size + 1)
+          case Some(out @ OutState(_, _, Some(nextTo), _, _, _)) =>
+            // there is demand, send immediately
+            send(msg, outKey, out.seqNr, nextTo)
+            val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, replyTo)
+            s.copy(
+              out = s.out.updated(outKey, out.copy(seqNr = out.seqNr + 1, nextTo = None, unconfirmed = newUnconfirmed)),
+              pendingReplies = newPendingReplies)
+          case Some(out @ OutState(_, _, None, buffered, _, _)) =>
+            // no demand, buffer
+            // FIXME limit the buffers.
+            context.log.info("Buffering message to entityId [{}], buffer size [{}]", entityId, buffered.size + 1)
+            val newBuffered = buffered :+ Buffered(totalSeqNr, msg, replyTo)
+            val newS =
+              s.copy(out = s.out.updated(outKey, out.copy(buffered = newBuffered)), pendingReplies = newPendingReplies)
             // send an updated RequestNext to indicate buffer usage
-            val newS = s.copy(s.out.updated(outKey, out.copy(pending = pending :+ msg -> replyTo)))
             producer ! createRequestNext(newS)
             newS
           case None =>
@@ -113,16 +256,92 @@ class ShardingProducerController[A: ClassTag](
             val send: ConsumerController.SequencedMessage[A] => Unit = { seqMsg =>
               region ! ShardingEnvelope(entityId, seqMsg)
             }
-            // FIXME support DurableProducerQueue
             val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None, send), entityId)
             p ! ProducerController.Start(requestNextAdapter)
-            s.copy(s.out.updated(outKey, OutState(entityId, p, None, Vector(msg -> replyTo))))
+            s.copy(
+              out = s.out.updated(
+                outKey,
+                OutState(entityId, p, None, Vector(Buffered(totalSeqNr, msg, replyTo)), 1L, Vector.empty)),
+              pendingReplies = newPendingReplies)
         }
 
       active(newState)
     }
 
+    def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
+      val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
+        case Unconfirmed(_, seqNr, _) => seqNr <= confirmedSeqNr
+      }
+
+      if (confirmed.nonEmpty) {
+        context.log.info("Confirmed seqNr [{}] from entity [{}]", confirmedSeqNr, outState.entityId)
+        confirmed.foreach {
+          case Unconfirmed(_, _, None) => // no reply
+          case Unconfirmed(_, _, Some(replyTo)) =>
+            replyTo ! Done
+        }
+
+        durableQueue.foreach { d =>
+          // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr)
+        }
+      }
+
+      newUnconfirmed
+    }
+
     Behaviors.receiveMessage {
+
+      case msg: Msg[A] =>
+        if (durableQueue.isEmpty) {
+          // currentSeqNr is only updated when durableQueue is enabled
+          onMessage(msg.envelope.entityId, msg.envelope.message, None, s.currentSeqNr, s.pendingReplies)
+        } else {
+          storeMessageSent(MessageSent(s.currentSeqNr, msg.envelope, ack = false), attempt = 1)
+          active(s.copy(currentSeqNr = s.currentSeqNr + 1))
+        }
+
+      case MessageWithConfirmation(entityId, message: A, replyTo) =>
+        if (durableQueue.isEmpty) {
+          onMessage(entityId, message, Some(replyTo), s.currentSeqNr, s.pendingReplies)
+        } else {
+          storeMessageSent(MessageSent(s.currentSeqNr, ShardingEnvelope(entityId, message), ack = true), attempt = 1)
+          // FIXME maybe possible to simplify the replyTo, now it's moved between pendingReplies, Buffered, Unconfirmed
+          val newPendingReplies = s.pendingReplies :+ (s.currentSeqNr -> replyTo)
+          active(s.copy(currentSeqNr = s.currentSeqNr + 1, pendingReplies = newPendingReplies))
+        }
+
+      case StoreMessageSentCompleted(MessageSent(seqNr, env: ShardingEnvelope[A], _)) =>
+        val newPendingReplies =
+          if (s.pendingReplies.isEmpty) {
+            s.pendingReplies
+          } else {
+            val (headSeqNr, replyTo) = s.pendingReplies.head
+            if (headSeqNr != seqNr)
+              throw new IllegalStateException(s"Unexpected pending reply [$headSeqNr] after storage of [$seqNr].")
+            context.log.info("Confirmation reply to [{}] after storage", seqNr)
+            replyTo ! Done
+            s.pendingReplies.tail
+          }
+
+        onMessage(env.entityId, env.message, replyTo = None, seqNr, newPendingReplies)
+
+      case f: StoreMessageSentFailed[ShardingEnvelope[A]] @unchecked =>
+        // FIXME attempt counter, and give up
+        context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+        // retry
+        storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+        Behaviors.same
+
+      case Ack(outKey, confirmedSeqNr) =>
+        s.out.get(outKey) match {
+          case Some(outState) =>
+            val newUnconfirmed = onAck(outState, confirmedSeqNr)
+            active(s.copy(out = s.out.updated(outKey, outState.copy(unconfirmed = newUnconfirmed))))
+          case None =>
+            // obsolete Next, ConsumerController already deregistered
+            Behaviors.unhandled
+        }
 
       case w: WrappedRequestNext[A] =>
         val next = w.next
@@ -132,15 +351,26 @@ class ShardingProducerController[A: ClassTag](
             if (out.nextTo.nonEmpty)
               throw new IllegalStateException(s"Received RequestNext but already has demand for [$outKey]")
 
-            if (out.pending.nonEmpty) {
-              val (msg, replyTo) = out.pending.head
-              send(msg, replyTo, next)
-              val newProducers = s.out.updated(outKey, out.copy(pending = out.pending.tail))
-              active(s.copy(newProducers))
+            val confirmedSeqNr = w.next.confirmedSeqNr
+            context.log.info("RequestNext from [{}], confirmed seqNr [{}]", out.entityId, confirmedSeqNr)
+            val newUnconfirmed = onAck(out, confirmedSeqNr)
+
+            if (out.buffered.nonEmpty) {
+              val buf = out.buffered.head
+              send(buf.msg, outKey, out.seqNr, next)
+              val newUnconfirmed2 = newUnconfirmed :+ Unconfirmed(buf.totalSeqNr, out.seqNr, buf.replyTo)
+              val newProducers = s.out.updated(
+                outKey,
+                out.copy(
+                  seqNr = out.seqNr + 1,
+                  nextTo = None,
+                  unconfirmed = newUnconfirmed2,
+                  buffered = out.buffered.tail))
+              active(s.copy(out = newProducers))
             } else {
               val newProducers =
-                s.out.updated(outKey, out.copy(nextTo = Some(next)))
-              val newState = s.copy(newProducers)
+                s.out.updated(outKey, out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed))
+              val newState = s.copy(out = newProducers)
               // send an updated RequestNext
               producer ! createRequestNext(newState)
               active(newState)
@@ -150,17 +380,6 @@ class ShardingProducerController[A: ClassTag](
             // FIXME support termination and removal of ProducerController
             throw new IllegalStateException(s"Unexpected RequestNext for unknown [$outKey]")
         }
-
-      case Msg(ShardingEnvelope(entityId, msg: A)) =>
-        onMsg(entityId, msg, None)
-
-      case MessageWithConfirmation(entityId, msg: A, replyTo) =>
-        onMsg(entityId, msg, Some(replyTo))
-
-      case Ack(replyTo) =>
-        replyTo ! Done
-        Behaviors.same
-
       // FIXME case Start register of new produce, e.g. restart
     }
   }
@@ -168,24 +387,33 @@ class ShardingProducerController[A: ClassTag](
   private def createRequestNext(s: State[A]) = {
     val entitiesWithDemand = s.out.valuesIterator.collect { case out if out.nextTo.nonEmpty => out.entityId }.toSet
     val bufferedForEntitesWithoutDemand = s.out.valuesIterator.collect {
-      case out if out.nextTo.isEmpty => out.entityId -> out.pending.size
+      case out if out.nextTo.isEmpty => out.entityId -> out.buffered.size
     }.toMap
     RequestNext(msgAdapter, context.self, entitiesWithDemand, bufferedForEntitesWithoutDemand)
   }
 
-  private def send(msg: A, replyTo: Option[ActorRef[Done]], nextTo: ProducerController.RequestNext[A]): Unit = {
-    replyTo match {
-      case None =>
-        nextTo.sendNextTo ! msg
-      case Some(r) =>
-        implicit val askTimeout: Timeout = 60.seconds // FIXME config
-        context.ask[ProducerController.MessageWithConfirmation[A], Long](
-          nextTo.askNextTo,
-          ProducerController.MessageWithConfirmation(msg, _)) {
-          case Success(_) => Ack(r)
-          case Failure(exc) =>
-            throw exc // FIXME what to do for AskTimeout? can probably be ignored since actual producer ask will have it's own timeout
-        }
+  private def send(msg: A, outKey: String, outSeqNr: Long, nextTo: ProducerController.RequestNext[A]): Unit = {
+    context.log.info("send [{}], outSeqNr [{}]", msg, outSeqNr) // FIXME remove
+    implicit val askTimeout: Timeout = 60.seconds // FIXME config
+    context.ask[ProducerController.MessageWithConfirmation[A], Long](
+      nextTo.askNextTo,
+      ProducerController.MessageWithConfirmation(msg, _)) {
+      case Success(seqNr) =>
+        if (seqNr != outSeqNr)
+          context.log.error("Inconsistent Ack seqNr [{}] != [{}]", seqNr, outSeqNr)
+        Ack(outKey, outSeqNr)
+      case Failure(exc) =>
+        throw exc // FIXME what to do for AskTimeout? can probably be ignored since actual producer ask will have it's own timeout
+    }
+  }
+
+  private def storeMessageSent(messageSent: MessageSent[ShardingEnvelope[A]], attempt: Int): Unit = {
+    implicit val askTimeout: Timeout = 3.seconds // FIXME config
+    context.ask[StoreMessageSent[ShardingEnvelope[A]], StoreMessageSentAck](
+      durableQueue.get,
+      askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
+      case Success(_) => StoreMessageSentCompleted(messageSent)
+      case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
     }
   }
 }

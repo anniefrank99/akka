@@ -333,15 +333,6 @@ private class ProducerController[A: ClassTag](
       }
     }
 
-    def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
-      ctx.ask[StoreMessageSent[A], StoreMessageSentAck](
-        durableQueue.get,
-        askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
-        case Success(_) => StoreMessageSentCompleted(messageSent)
-        case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
-      }
-    }
-
     def onAck(newConfirmedSeqNr: Long): State[A] = {
       val (replies, newPendingReplies) = s.pendingReplies.partition { case (seqNr, _) => seqNr <= newConfirmedSeqNr }
       if (replies.nonEmpty)
@@ -506,6 +497,15 @@ private class ProducerController[A: ClassTag](
         // update the send function
         val newSend = consumerController ! _
         active(s.copy(firstSeqNr = newFirstSeqNr, send = newSend))
+    }
+  }
+
+  private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
+    ctx.ask[StoreMessageSent[A], StoreMessageSentAck](
+      durableQueue.get,
+      askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
+      case Success(_) => StoreMessageSentCompleted(messageSent)
+      case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
     }
   }
 }

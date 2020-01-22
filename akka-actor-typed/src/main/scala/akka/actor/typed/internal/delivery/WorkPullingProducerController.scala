@@ -30,6 +30,7 @@ object WorkPullingProducerController {
 
   final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
 
+  // FIXME include demand indicator in RequestNext
   final case class RequestNext[A](sendNextTo: ActorRef[A], askNextTo: ActorRef[MessageWithConfirmation[A]])
 
   /**
@@ -53,7 +54,6 @@ object WorkPullingProducerController {
   private case class StoreMessageSentReply(ack: DurableProducerQueue.StoreMessageSentAck)
   private case class StoreMessageSentFailed[A](messageSent: DurableProducerQueue.MessageSent[A], attempt: Int)
       extends InternalCommand
-
   private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
       extends InternalCommand
 
@@ -175,7 +175,7 @@ object WorkPullingProducerController {
 
     durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
-      context.watch(ref) // FIXME handle terminated, but it's supposed to be restarted so death pact is alright
+      context.watch(ref) // FIXME handle terminated, but it's not supposed to be restarted so death pact is alright
       askLoadState(context, Some(ref), attempt = 1)
       ref
     }
@@ -288,16 +288,6 @@ class WorkPullingProducerController[A: ClassTag](
       }
     }
 
-    def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
-      implicit val askTimeout: Timeout = 3.seconds // FIXME config
-      context.ask[StoreMessageSent[A], StoreMessageSentAck](
-        durableQueue.get,
-        askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
-        case Success(_) => StoreMessageSentCompleted(messageSent)
-        case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
-      }
-    }
-
     def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
       val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
         case Unconfirmed(_, seqNr, _, _) => seqNr <= confirmedSeqNr
@@ -311,6 +301,7 @@ class WorkPullingProducerController[A: ClassTag](
 
         durableQueue.foreach { d =>
           // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
+          // FIXME BUG. Ack from one worker shouldn't mean Ack from other workers with unconfirmed lower totalSeqNr
           d ! StoreMessageConfirmed(confirmed.last.totalSeqNr)
         }
       }
@@ -451,6 +442,16 @@ class WorkPullingProducerController[A: ClassTag](
 
       // FIXME case Start register of new produce, e.g. restart
 
+    }
+  }
+
+  private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
+    implicit val askTimeout: Timeout = 3.seconds // FIXME config
+    context.ask[StoreMessageSent[A], StoreMessageSentAck](
+      durableQueue.get,
+      askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
+      case Success(_) => StoreMessageSentCompleted(messageSent)
+      case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
     }
   }
 }

@@ -96,7 +96,7 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
           s"sharding-$idCount")
 
       val shardingController =
-        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding), s"shardingController-$idCount")
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
       val producer = spawn(TestShardingProducer(shardingController), name = s"shardingProducer-$idCount")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
@@ -123,7 +123,8 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
         spawn(
           ShardingProducerController[TestConsumer.Job](
             s"p1-$idCount", // note different producerId
-            sharding),
+            sharding,
+            None),
           s"shardingController1-$idCount")
       val producer1 = spawn(TestShardingProducer(shardingController1), name = s"shardingProducer1-$idCount")
 
@@ -131,7 +132,8 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
         spawn(
           ShardingProducerController[TestConsumer.Job](
             s"p2-$idCount", // note different producerId
-            sharding),
+            sharding,
+            None),
           s"shardingController2-$idCount")
       val producer2 = spawn(TestShardingProducer(shardingController2), name = s"shardingProducer2-$idCount")
 
@@ -167,7 +169,7 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
           s"sharding-$idCount")
 
       val shardingController =
-        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding), s"shardingController-$idCount")
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
 
       val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
       shardingController ! ShardingProducerController.Start(producerProbe.ref)
@@ -214,14 +216,14 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
         createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
       val shardingProducerController =
         spawn(
-          ShardingProducerController[TestConsumer.Job](producerId, shardingProbe.ref),
+          ShardingProducerController[TestConsumer.Job](producerId, shardingProbe.ref, None),
           s"shardingController-$idCount")
       val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
       shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
 
       val next1 = producerProbe.receiveMessage()
       next1.entitiesWithDemand should ===(Set.empty)
-      next1.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next1.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next1.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
       // for the first message no RequestNext until initial roundtrip
@@ -233,23 +235,23 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       val next2 = producerProbe.receiveMessage()
       next2.entitiesWithDemand should ===(Set("entity-1"))
-      next2.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next2.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next2.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
       val next3 = producerProbe.receiveMessage()
       // could be sent immediately since had demand, and Request(upToSeqNr-5)
       next3.entitiesWithDemand should ===(Set("entity-1"))
-      next3.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next3.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next3.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
       val next4 = producerProbe.receiveMessage()
       next4.entitiesWithDemand should ===(Set("entity-1"))
-      next4.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next4.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next4.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-4"))
       val next5 = producerProbe.receiveMessage()
       next5.entitiesWithDemand should ===(Set("entity-1"))
-      next5.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next5.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-5"))
       // no more demand Request(upToSeqNr-5)
@@ -265,7 +267,7 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       val next6 = producerProbe.receiveMessage()
       next6.entitiesWithDemand should ===(Set.empty)
-      next6.bufferedForEntitesWithoutDemand should ===(Map("entity-1" -> 1))
+      next6.bufferedForEntitiesWithoutDemand should ===(Map("entity-1" -> 1))
 
       // and we can send to another entity
       next6.sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-7"))
@@ -276,7 +278,7 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       val next8 = producerProbe.receiveMessage()
       next8.entitiesWithDemand should ===(Set("entity-2"))
-      next8.bufferedForEntitesWithoutDemand should ===(Map("entity-1" -> 1))
+      next8.bufferedForEntitiesWithoutDemand should ===(Map("entity-1" -> 1))
 
       // when new demand the buffered messages will be be sent
       seq5.producer ! ProducerController.Internal.Request(confirmedSeqNr = 5L, upToSeqNr = 10, true, false)
@@ -285,7 +287,7 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       val next9 = producerProbe.receiveMessage()
       next9.entitiesWithDemand should ===(Set("entity-1", "entity-2"))
-      next9.bufferedForEntitesWithoutDemand should ===(Map.empty)
+      next9.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       testKit.stop(shardingProducerController)
     }
