@@ -174,26 +174,32 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSp
 
       val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-0", TestConsumer.Job("msg-1")),
+        "entity-0",
+        TestConsumer.Job("msg-1"),
         replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-0", TestConsumer.Job("msg-2")),
+        "entity-0",
+        TestConsumer.Job("msg-2"),
         replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")),
+        "entity-1",
+        TestConsumer.Job("msg-3"),
         replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-0", TestConsumer.Job("msg-4")),
+        "entity-0",
+        TestConsumer.Job("msg-4"),
         replyProbe.ref)
 
       consumerEndProbe.receiveMessage() // entity-0 received 3 messages
       consumerEndProbe.expectNoMessage()
 
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")),
+        "entity-1",
+        TestConsumer.Job("msg-5"),
         replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
-        ShardingEnvelope("entity-1", TestConsumer.Job("msg-6")),
+        "entity-1",
+        TestConsumer.Job("msg-6"),
         replyProbe.ref)
       consumerEndProbe.receiveMessage() // entity-0 received 3 messages
 

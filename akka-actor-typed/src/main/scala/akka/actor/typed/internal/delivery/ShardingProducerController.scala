@@ -36,7 +36,7 @@ object ShardingProducerController {
    * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
    * fully delivered, processed, and confirmed by the consumer.
    */
-  final case class MessageWithConfirmation[A](message: ShardingEnvelope[A], replyTo: ActorRef[Done])
+  final case class MessageWithConfirmation[A](entityId: String, message: A, replyTo: ActorRef[Done])
       extends InternalCommand
 
   private final case class Ack(replyTo: ActorRef[Done]) extends InternalCommand
@@ -154,7 +154,7 @@ class ShardingProducerController[A: ClassTag](
       case Msg(ShardingEnvelope(entityId, msg: A)) =>
         onMsg(entityId, msg, None)
 
-      case MessageWithConfirmation(ShardingEnvelope(entityId, msg: A), replyTo) =>
+      case MessageWithConfirmation(entityId, msg: A, replyTo) =>
         onMsg(entityId, msg, Some(replyTo))
 
       case Ack(replyTo) =>
