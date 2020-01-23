@@ -40,6 +40,19 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike
 
   val workerServiceKey: ServiceKey[ConsumerController.Command[TestConsumer.Job]] = ServiceKey("worker")
 
+  // don't compare the UUID fields
+  private def assertState(
+      s: DurableProducerQueue.State[TestConsumer.Job],
+      expected: DurableProducerQueue.State[TestConsumer.Job]): Unit = {
+
+    def cleanup(a: DurableProducerQueue.State[TestConsumer.Job]) =
+      a.copy(
+        confirmedSeqNr = Map.empty,
+        unconfirmed = s.unconfirmed.map(m => m.copy(confirmationQualifier = DurableProducerQueue.NoQualifier)))
+
+    cleanup(s) should ===(cleanup(expected))
+  }
+
   "ReliableDelivery with work-pulling and durable queue" must {
 
     "load initial state and resend unconfirmed" in {
@@ -149,35 +162,216 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(
+        assertState(
+          stateHolder.get(),
           DurableProducerQueue
             .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
       }
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg1.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Map(NoQualifier -> 1), Vector.empty))
+        assertState(stateHolder.get(), DurableProducerQueue.State(2, 1, Map.empty, Vector.empty))
       }
 
       val replyTo = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
-      workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
-      workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyTo.ref)
-      workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-5")
+      workerController1Probe.receiveMessage() // msg-2
+      workerController1Probe.receiveMessage() // msg-3
+      workerController1Probe.receiveMessage() // msg-4
+      val seqMsg5 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg5.seqNr should ===(5)
+
+      // no more demand, since 5 messages sent but no Ack
+      producerProbe.expectNoMessage()
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            6,
+            1,
+            Map.empty,
+            Vector(
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+      }
+
+      // start another worker
+      val workerController2Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController2Probe.ref)
+      awaitWorkersRegistered(workPullingController, 2)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-6")
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            7,
+            1,
+            Map.empty,
+            Vector(
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier),
+              MessageSent(6, TestConsumer.Job("msg-6"), ack = false, NoQualifier))))
+      }
+      val seqMsg6 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg6.msg should ===(TestConsumer.Job("msg-6"))
+      seqMsg6.seqNr should ===(1) // different ProducerController-ConsumerController
+      seqMsg6.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            7,
+            6,
+            Map.empty,
+            Vector(
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+      }
+
       seqMsg1.producer ! ProducerController.Internal.Ack(3)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(
+        assertState(
+          stateHolder.get(),
           DurableProducerQueue.State(
-            5,
-            3,
-            Map(NoQualifier -> 3),
-            Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier))))
+            7,
+            6,
+            Map.empty,
+            Vector(
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
       }
 
       workerController1Probe.stop()
+      workerController2Probe.stop()
+      awaitWorkersRegistered(workPullingController, 0)
+      testKit.stop(workPullingController)
+    }
+
+    "hand over, and resend unconfirmed when worker is unregistered" in {
+      nextId()
+
+      val stateHolder =
+        new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]](DurableProducerQueue.State.empty)
+      val durable = TestDurableProducerQueue[TestConsumer.Job](
+        Duration.Zero,
+        stateHolder,
+        (_: DurableProducerQueue.Command[_]) => false)
+
+      val workPullingController =
+        spawn(
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, Some(durable)),
+          s"workPullingController-${idCount}")
+      val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
+      workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
+
+      val workerController1Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
+      awaitWorkersRegistered(workPullingController, 1)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue
+            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
+      }
+      val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
+      seqMsg1.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-5")
+      workerController1Probe.receiveMessage() // msg-2
+      workerController1Probe.receiveMessage() // msg-3
+      workerController1Probe.receiveMessage() // msg-4
+      workerController1Probe.receiveMessage() // msg-5
+
+      // no more demand, since 5 messages sent but no Ack
+      producerProbe.expectNoMessage()
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            6,
+            1,
+            Map.empty,
+            Vector(
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = false, NoQualifier),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = false, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+      }
+
+      // start another worker
+      val workerController2Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController2Probe.ref)
+      awaitWorkersRegistered(workPullingController, 2)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-6")
+      val seqMsg6 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg6.msg should ===(TestConsumer.Job("msg-6"))
+      // note that it's only requesting 3
+      seqMsg6.producer ! ProducerController.Internal.Request(1L, 3L, true, false)
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            7,
+            6,
+            Map.empty,
+            Vector(
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+      }
+
+      workerController1Probe.stop()
+      awaitWorkersRegistered(workPullingController, 1)
+
+      // msg-2, msg-3, msg-4, msg-5 were originally sent to worker1, but not confirmed
+      // so they will be resent and delivered to worker2
+      val seqMsg7 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg7.msg should ===(TestConsumer.Job("msg-2"))
+      val seqMsg8 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg8.msg should ===(TestConsumer.Job("msg-3"))
+      seqMsg8.seqNr should ===(3)
+      // but it has only requested 3 so no more
+      workerController2Probe.expectNoMessage()
+      // then request more, and confirm 3
+      seqMsg8.producer ! ProducerController.Internal.Request(3L, 10L, true, false)
+      val seqMsg9 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg9.msg should ===(TestConsumer.Job("msg-4"))
+      val seqMsg10 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg10.msg should ===(TestConsumer.Job("msg-5"))
+
+      seqMsg9.producer ! ProducerController.Internal.Ack(seqMsg9.seqNr)
+      producerProbe.awaitAssert {
+        assertState(
+          stateHolder.get(),
+          DurableProducerQueue.State(
+            11,
+            9,
+            Map.empty,
+            Vector(
+              // note that it has a different seqNr than before
+              MessageSent(10, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+      }
+
+      workerController1Probe.stop()
+      workerController2Probe.stop()
       awaitWorkersRegistered(workPullingController, 0)
       testKit.stop(workPullingController)
     }

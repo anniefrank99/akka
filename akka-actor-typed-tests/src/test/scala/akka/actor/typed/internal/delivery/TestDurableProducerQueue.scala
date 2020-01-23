@@ -59,7 +59,10 @@ class TestDurableProducerQueue[A](
 
       case cmd: StoreMessageSent[A] @unchecked =>
         if (cmd.sent.seqNr == state.currentSeqNr) {
-          context.log.info("StoreMessageSent seqNr [{}]", cmd.sent.seqNr)
+          context.log.info(
+            "StoreMessageSent seqNr [{}], confirmationQualifier [{}]",
+            cmd.sent.seqNr,
+            cmd.sent.confirmationQualifier)
           maybeFail(cmd)
           val reply = StoreMessageSentAck(cmd.sent.seqNr)
           if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
@@ -77,7 +80,10 @@ class TestDurableProducerQueue[A](
         }
 
       case cmd: StoreMessageConfirmed[A] @unchecked =>
-        context.log.info("StoreMessageConfirmed seqNr [{}]", cmd.seqNr)
+        context.log.info(
+          "StoreMessageConfirmed seqNr [{}], confirmationQualifier [{}]",
+          cmd.seqNr,
+          cmd.confirmationQualifier)
         maybeFail(cmd)
         val newUnconfirmed = state.unconfirmed.filterNot { u =>
           u.confirmationQualifier == cmd.confirmationQualifier && u.seqNr <= cmd.seqNr
