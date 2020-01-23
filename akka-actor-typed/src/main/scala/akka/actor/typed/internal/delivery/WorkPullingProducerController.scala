@@ -338,7 +338,7 @@ class WorkPullingProducerController[A: ClassTag](
 
         onMessage(m, wasStashed = false, replyTo = None, seqNr, newReplyAfterStore)
 
-      case f: StoreMessageSentFailed[A] @unchecked =>
+      case f: StoreMessageSentFailed[A] =>
         // FIXME attempt counter, and give up
         context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
         // retry
@@ -355,7 +355,7 @@ class WorkPullingProducerController[A: ClassTag](
             Behaviors.unhandled
         }
 
-      case curr: CurrentWorkers[A] @unchecked =>
+      case curr: CurrentWorkers[A] =>
         // FIXME adjust all logging, most should probably be debug
         val addedWorkers = curr.workers.diff(s.workers)
         val removedWorkers = s.workers.diff(curr.workers)

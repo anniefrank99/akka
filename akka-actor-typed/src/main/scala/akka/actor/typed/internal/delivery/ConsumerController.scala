@@ -194,7 +194,7 @@ private class ConsumerController[A](
   // the seqNr is right.
   private def active(s: State[A]): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg: SequencedMessage[A] @unchecked =>
+      case seqMsg: SequencedMessage[A] =>
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
         checkProducerId(producerId, pid, seqNr)
@@ -231,7 +231,7 @@ private class ConsumerController[A](
         context.log.warn("Unexpected confirmed [{}]", seqNr)
         Behaviors.unhandled
 
-      case start: Start[A] @unchecked =>
+      case start: Start[A] =>
         // if consumer is restarted it may send Start again
         context.unwatch(s.consumer)
         context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
@@ -257,7 +257,7 @@ private class ConsumerController[A](
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State[A]): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case seqMsg: SequencedMessage[A] @unchecked =>
+      case seqMsg: SequencedMessage[A] =>
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
         checkProducerId(producerId, pid, seqNr)
@@ -288,7 +288,7 @@ private class ConsumerController[A](
         context.log.warn("Unexpected confirmed [{}]", seqNr)
         Behaviors.unhandled
 
-      case start: Start[A] @unchecked =>
+      case start: Start[A] =>
         // if consumer is restarted it may send Start again
         context.unwatch(s.consumer)
         context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
@@ -347,7 +347,7 @@ private class ConsumerController[A](
           context.log.info("Unstash [{}]", stashBuffer.size)
         stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
-      case seqMsg: SequencedMessage[A] @unchecked =>
+      case seqMsg: SequencedMessage[A] =>
         if (stashBuffer.isFull) {
           // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
           // dropping them since they can be resent
@@ -361,7 +361,7 @@ private class ConsumerController[A](
       case Retry =>
         waitingForConfirmation(retryRequest(s), seqMsg)
 
-      case start: Start[A] @unchecked =>
+      case start: Start[A] =>
         // if consumer is restarted it may send Start again
         context.unwatch(s.consumer)
         context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))

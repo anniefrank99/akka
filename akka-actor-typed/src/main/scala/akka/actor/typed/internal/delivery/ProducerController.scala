@@ -397,7 +397,7 @@ private class ProducerController[A: ClassTag](
 
         onMsg(m, newReplyAfterStore, ack)
 
-      case f: StoreMessageSentFailed[A] @unchecked =>
+      case f: StoreMessageSentFailed[A] =>
         // FIXME attempt counter, and give up
         context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
         // retry
@@ -471,7 +471,7 @@ private class ProducerController[A: ClassTag](
         }
         Behaviors.same
 
-      case start: Start[A] @unchecked =>
+      case start: Start[A] =>
         context.log.info("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
         if (s.requested)
           start.producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, context.self)

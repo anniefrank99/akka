@@ -317,7 +317,7 @@ class ShardingProducerController[A: ClassTag](
 
         onMessage(entityId, msg, replyTo = None, seqNr, newReplyAfterStore)
 
-      case f: StoreMessageSentFailed[A] @unchecked =>
+      case f: StoreMessageSentFailed[A] =>
         // FIXME attempt counter, and give up
         context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
         // retry

@@ -31,7 +31,7 @@ object ShardingConsumerController {
     Behaviors.withStash(10000) { stashBuffer => // FIXME buffer size
       Behaviors
         .receiveMessage[ConsumerController.Command[A]] {
-          case start: ConsumerController.Start[A] @unchecked =>
+          case start: ConsumerController.Start[A] =>
             stashBuffer.unstashAll(
               new ShardingConsumerController[A](context, resendLost, start.deliverTo).active(Map.empty))
           case other =>
@@ -57,7 +57,7 @@ class ShardingConsumerController[A](
 
     Behaviors
       .receiveMessagePartial[ConsumerController.Command[A]] {
-        case msg: ConsumerController.SequencedMessage[A] @unchecked =>
+        case msg: ConsumerController.SequencedMessage[A] =>
           controllers.get(msg.producerId) match {
             case Some(c) =>
               c ! msg
