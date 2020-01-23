@@ -67,15 +67,15 @@ object WorkPullingProducerController {
   private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, msg: A, replyTo: Option[ActorRef[Done]])
 
   private object State {
-    def empty[A]: State[A] = State(1, Set.empty, Map.empty, Vector.empty, 0, hasRequested = false)
+    def empty[A]: State[A] = State(1, Set.empty, Map.empty, Map.empty, 0, hasRequested = false)
   }
 
   private final case class State[A](
       currentSeqNr: Long,
       workers: Set[ActorRef[ConsumerController.Command[A]]],
       out: Map[String, OutState[A]],
-      // pendingReplies is used when durableQueue is enabled, otherwise they are tracked in OutState
-      pendingReplies: Vector[(Long, ActorRef[Done])],
+      // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
+      replyAfterStore: Map[Long, ActorRef[Done]],
       producerIdCount: Long,
       hasRequested: Boolean)
 
@@ -220,7 +220,7 @@ class WorkPullingProducerController[A: ClassTag](
         wasStashed: Boolean,
         replyTo: Option[ActorRef[Done]],
         totalSeqNr: Long,
-        newPendingReplies: Vector[(Long, ActorRef[Done])]): Behavior[InternalCommand] = {
+        newReplyAfterStore: Map[Long, ActorRef[Done]]): Behavior[InternalCommand] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
       context.log.infoN(
         "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}]",
@@ -236,7 +236,7 @@ class WorkPullingProducerController[A: ClassTag](
         context.log.info("Stash [{}]", msg)
         stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
         val newRequested = if (wasStashed) s.hasRequested else false
-        active(s.copy(pendingReplies = newPendingReplies, hasRequested = newRequested))
+        active(s.copy(replyAfterStore = newReplyAfterStore, hasRequested = newRequested))
       } else {
         val i = ThreadLocalRandom.current().nextInt(consumersWithDemand.size)
         val (outKey, out) = consumersWithDemand(i)
@@ -284,7 +284,7 @@ class WorkPullingProducerController[A: ClassTag](
               s"wasStashed [$wasStashed], hasMoreDemand [$hasMoreDemand], stashBuffer.isEmpty [${stashBuffer.isEmpty}]")
           }
 
-        active(s.copy(out = newOut, hasRequested = newRequested, pendingReplies = newPendingReplies))
+        active(s.copy(out = newOut, hasRequested = newRequested, replyAfterStore = newReplyAfterStore))
       }
     }
 
@@ -313,7 +313,7 @@ class WorkPullingProducerController[A: ClassTag](
       case Msg(msg: A, wasStashed, replyTo) =>
         if (durableQueue.isEmpty || wasStashed) {
           // currentSeqNr is only updated when durableQueue is enabled
-          onMessage(msg, wasStashed, replyTo, s.currentSeqNr, s.pendingReplies)
+          onMessage(msg, wasStashed, replyTo, s.currentSeqNr, s.replyAfterStore)
         } else {
           storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = false), attempt = 1)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1))
@@ -321,27 +321,21 @@ class WorkPullingProducerController[A: ClassTag](
 
       case MessageWithConfirmation(msg: A, replyTo) =>
         if (durableQueue.isEmpty) {
-          onMessage(msg, wasStashed = false, Some(replyTo), s.currentSeqNr, s.pendingReplies)
+          onMessage(msg, wasStashed = false, Some(replyTo), s.currentSeqNr, s.replyAfterStore)
         } else {
           storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = true), attempt = 1)
-          val newPendingReplies = s.pendingReplies :+ (s.currentSeqNr -> replyTo)
-          active(s.copy(currentSeqNr = s.currentSeqNr + 1, pendingReplies = newPendingReplies))
+          val newReplyAfterStore = s.replyAfterStore.updated(s.currentSeqNr, replyTo)
+          active(s.copy(currentSeqNr = s.currentSeqNr + 1, replyAfterStore = newReplyAfterStore))
         }
 
       case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _)) =>
-        val newPendingReplies =
-          if (s.pendingReplies.isEmpty) {
-            s.pendingReplies
-          } else {
-            val (headSeqNr, replyTo) = s.pendingReplies.head
-            if (headSeqNr != seqNr)
-              throw new IllegalStateException(s"Unexpected pending reply [$headSeqNr] after storage of [$seqNr].")
-            context.log.info("Confirmation reply to [{}] after storage", seqNr)
-            replyTo ! Done
-            s.pendingReplies.tail
-          }
+        s.replyAfterStore.get(seqNr).foreach { replyTo =>
+          context.log.info("Confirmation reply to [{}] after storage", seqNr)
+          replyTo ! Done
+        }
+        val newReplyAfterStore = s.replyAfterStore - seqNr
 
-        onMessage(m, wasStashed = false, replyTo = None, seqNr, newPendingReplies)
+        onMessage(m, wasStashed = false, replyTo = None, seqNr, newReplyAfterStore)
 
       case f: StoreMessageSentFailed[A] @unchecked =>
         // FIXME attempt counter, and give up
