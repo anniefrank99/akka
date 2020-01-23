@@ -31,17 +31,15 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
     "load initial state and resend unconfirmed" in {
       nextId()
 
-      val durable = TestDurableProducerQueue[ShardingEnvelope[TestConsumer.Job]](
+      val durable = TestDurableProducerQueue[TestConsumer.Job](
         Duration.Zero,
         DurableProducerQueue.State(
           currentSeqNr = 5,
           highestConfirmedSeqNr = 2,
           confirmedSeqNr = Map("entity-1" -> 2),
           unconfirmed = Vector(
-            DurableProducerQueue
-              .MessageSent(3, ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")), false, "entity-1"),
-            DurableProducerQueue
-              .MessageSent(4, ShardingEnvelope("entity-1", TestConsumer.Job("msg-4")), false, "entity-1"))))
+            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, "entity-1"),
+            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, "entity-1"))))
 
       val shardingProbe =
         createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
@@ -74,9 +72,7 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
       import ShardingProducerController.MessageWithConfirmation
       nextId()
       val durable =
-        TestDurableProducerQueue[ShardingEnvelope[TestConsumer.Job]](
-          Duration.Zero,
-          DurableProducerQueue.State.empty[ShardingEnvelope[TestConsumer.Job]])
+        TestDurableProducerQueue[TestConsumer.Job](Duration.Zero, DurableProducerQueue.State.empty[TestConsumer.Job])
       val shardingProbe =
         createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
       val shardingProducerController =
@@ -130,9 +126,8 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
       nextId()
 
       val stateHolder =
-        new AtomicReference[DurableProducerQueue.State[ShardingEnvelope[TestConsumer.Job]]](
-          DurableProducerQueue.State.empty)
-      val durable = TestDurableProducerQueue[ShardingEnvelope[TestConsumer.Job]](
+        new AtomicReference[DurableProducerQueue.State[TestConsumer.Job]](DurableProducerQueue.State.empty)
+      val durable = TestDurableProducerQueue[TestConsumer.Job](
         Duration.Zero,
         stateHolder,
         (_: DurableProducerQueue.Command[_]) => false)
@@ -149,11 +144,8 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
-          DurableProducerQueue.State(
-            2,
-            0,
-            Map.empty,
-            Vector(MessageSent(1, ShardingEnvelope("entity-1", TestConsumer.Job("msg-1")), ack = false, "entity-1"))))
+          DurableProducerQueue
+            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, "entity-1"))))
       }
 
       val seq1 = shardingProbe.receiveMessage().message
@@ -195,9 +187,9 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
             4,
             Map("entity-1" -> 1, "entity-2" -> 4),
             Vector(
-              MessageSent(3, ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")), ack = false, "entity-1"),
-              MessageSent(5, ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")), ack = false, "entity-1"),
-              MessageSent(6, ShardingEnvelope("entity-2", TestConsumer.Job("msg-6")), ack = false, "entity-2"))))
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, "entity-1"),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, "entity-1"),
+              MessageSent(6, TestConsumer.Job("msg-6"), ack = false, "entity-2"))))
       }
 
       testKit.stop(shardingProducerController)
