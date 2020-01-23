@@ -6,9 +6,9 @@ package akka.actor.typed.internal.delivery
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class ConsumerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import TestConsumer.sequencedMessage
 
   private var idCount = 0

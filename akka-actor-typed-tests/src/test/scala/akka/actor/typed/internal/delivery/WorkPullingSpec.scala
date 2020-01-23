@@ -12,9 +12,9 @@ import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class WorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import TestConsumer.defaultConsumerDelay
   import TestProducer.defaultProducerDelay
 

@@ -15,7 +15,7 @@ import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
 import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
 object ReliableDeliveryShardingSpec {
 
@@ -69,7 +69,7 @@ object ReliableDeliveryShardingSpec {
 
 }
 
-class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import ReliableDeliveryShardingSpec._
   import TestConsumer.defaultConsumerDelay
 

@@ -15,9 +15,9 @@ import akka.actor.typed.ActorRef
 import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import DurableProducerQueue.NoQualifier
 
   private var idCount = 0

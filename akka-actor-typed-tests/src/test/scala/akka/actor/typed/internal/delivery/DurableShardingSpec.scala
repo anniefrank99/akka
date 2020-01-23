@@ -14,9 +14,9 @@ import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
 import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
 import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class DurableShardingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
 
   private var idCount = 0
   private def nextId(): Int = {

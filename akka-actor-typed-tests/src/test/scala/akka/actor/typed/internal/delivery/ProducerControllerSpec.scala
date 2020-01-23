@@ -9,9 +9,9 @@ import scala.concurrent.duration._
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.internal.delivery.ProducerController.MessageWithConfirmation
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class ProducerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import TestConsumer.sequencedMessage
 
   private var idCount = 0

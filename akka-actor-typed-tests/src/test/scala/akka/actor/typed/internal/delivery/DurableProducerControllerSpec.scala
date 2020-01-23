@@ -12,9 +12,9 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
 import akka.actor.typed.internal.delivery.ProducerController.MessageWithConfirmation
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
-class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import TestConsumer.sequencedMessage
   import DurableProducerQueue.NoQualifier
 

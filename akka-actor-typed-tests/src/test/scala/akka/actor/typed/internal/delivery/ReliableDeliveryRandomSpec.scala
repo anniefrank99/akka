@@ -16,7 +16,7 @@ import akka.actor.typed.BehaviorInterceptor
 import akka.actor.typed.TypedActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
-import org.scalatest.WordSpecLike
+import org.scalatest.wordspec.AnyWordSpecLike
 
 object ReliableDeliveryRandomSpec {
   object RandomFlakyNetwork {
@@ -40,7 +40,7 @@ object ReliableDeliveryRandomSpec {
   }
 }
 
-class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
+class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import ReliableDeliveryRandomSpec._
 
   private var idCount = 0
