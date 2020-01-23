@@ -22,7 +22,7 @@ object TestDurableProducerQueue {
       stateHolder: AtomicReference[State[A]],
       failWhen: Command[A] => Boolean): Behavior[Command[A]] = {
     if (stateHolder.get() eq null)
-      stateHolder.set(State(1L, 0L, Vector.empty))
+      stateHolder.set(State(1L, 0L, Map.empty, Vector.empty))
 
     Behaviors
       .supervise {
@@ -79,8 +79,15 @@ class TestDurableProducerQueue[A](
       case cmd: StoreMessageConfirmed[A] @unchecked =>
         context.log.info("StoreMessageConfirmed seqNr [{}]", cmd.seqNr)
         maybeFail(cmd)
-        val newUnconfirmed = state.unconfirmed.dropWhile(_.seqNr <= cmd.seqNr)
-        active(state.copy(confirmedSeqNr = cmd.seqNr, unconfirmed = newUnconfirmed))
+        val newUnconfirmed = state.unconfirmed.filterNot { u =>
+          u.confirmationQualifier == cmd.confirmationQualifier && u.seqNr <= cmd.seqNr
+        }
+        val newHighestConfirmed = math.max(state.highestConfirmedSeqNr, cmd.seqNr)
+        active(
+          state.copy(
+            highestConfirmedSeqNr = newHighestConfirmed,
+            confirmedSeqNr = state.confirmedSeqNr.updated(cmd.confirmationQualifier, cmd.seqNr),
+            unconfirmed = newUnconfirmed))
     }
   }
 

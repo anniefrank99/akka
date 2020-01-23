@@ -126,7 +126,8 @@ object WorkPullingProducerController {
     def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
       // resend unconfirmed to self, order doesn't matter for work pulling
       s.unconfirmed.foreach {
-        case DurableProducerQueue.MessageSent(_, msg, _) => context.self ! Msg(msg, wasStashed = true, replyTo = None)
+        case DurableProducerQueue.MessageSent(_, msg, _, _) =>
+          context.self ! Msg(msg, wasStashed = true, replyTo = None)
       }
 
       val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
@@ -302,7 +303,7 @@ class WorkPullingProducerController[A: ClassTag](
         durableQueue.foreach { d =>
           // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
           // FIXME BUG. Ack from one worker shouldn't mean Ack from other workers with unconfirmed lower totalSeqNr
-          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr)
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, DurableProducerQueue.NoQualifier)
         }
       }
 
@@ -315,7 +316,7 @@ class WorkPullingProducerController[A: ClassTag](
           // currentSeqNr is only updated when durableQueue is enabled
           onMessage(msg, wasStashed, replyTo, s.currentSeqNr, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = false), attempt = 1)
+          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = false, DurableProducerQueue.NoQualifier), attempt = 1)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1))
         }
 
@@ -323,12 +324,12 @@ class WorkPullingProducerController[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMessage(msg, wasStashed = false, Some(replyTo), s.currentSeqNr, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = true), attempt = 1)
+          storeMessageSent(MessageSent(s.currentSeqNr, msg, ack = true, DurableProducerQueue.NoQualifier), attempt = 1)
           val newReplyAfterStore = s.replyAfterStore.updated(s.currentSeqNr, replyTo)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1, replyAfterStore = newReplyAfterStore))
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _, _)) =>
         s.replyAfterStore.get(seqNr).foreach { replyTo =>
           context.log.info("Confirmation reply to [{}] after storage", seqNr)
           replyTo ! Done

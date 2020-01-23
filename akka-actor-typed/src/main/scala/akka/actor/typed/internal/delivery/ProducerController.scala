@@ -207,12 +207,12 @@ object ProducerController {
     State(
       requested = false,
       currentSeqNr = loadedState.currentSeqNr,
-      confirmedSeqNr = loadedState.confirmedSeqNr,
+      confirmedSeqNr = loadedState.highestConfirmedSeqNr,
       requestedSeqNr = 1L,
       replyAfterStore = Map.empty,
       supportResend = true,
       unconfirmed = unconfirmed,
-      firstSeqNr = loadedState.confirmedSeqNr + 1,
+      firstSeqNr = loadedState.highestConfirmedSeqNr + 1,
       producer,
       send)
   }
@@ -292,6 +292,7 @@ private class ProducerController[A: ClassTag](
   import DurableProducerQueue.StoreMessageSentAck
   import DurableProducerQueue.StoreMessageConfirmed
   import DurableProducerQueue.MessageSent
+  import DurableProducerQueue.NoQualifier
 
   private implicit val askTimeout: Timeout = 3.seconds // FIXME config
 
@@ -354,7 +355,7 @@ private class ProducerController[A: ClassTag](
         // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
         // FIXME to reduce number of writes we could consider to only StoreMessageConfirmed for the Request messages and not for each Ack
         if (newMaxConfirmedSeqNr != s.confirmedSeqNr)
-          d ! StoreMessageConfirmed(newMaxConfirmedSeqNr)
+          d ! StoreMessageConfirmed(newMaxConfirmedSeqNr, NoQualifier)
       }
 
       s.copy(confirmedSeqNr = newMaxConfirmedSeqNr, replyAfterStore = newReplyAfterStore, unconfirmed = newUnconfirmed)
@@ -372,7 +373,7 @@ private class ProducerController[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMsg(m, newReplyAfterStore, ack = true)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = true), attempt = 1)
+          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = true, NoQualifier), attempt = 1)
           active(s.copy(replyAfterStore = newReplyAfterStore))
         }
 
@@ -380,11 +381,11 @@ private class ProducerController[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMsg(m, s.replyAfterStore, ack = false)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = false), attempt = 1)
+          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = false, NoQualifier), attempt = 1)
           Behaviors.same
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack, NoQualifier)) =>
         if (seqNr != s.currentSeqNr)
           throw new IllegalStateException(s"currentSeqNr [${s.currentSeqNr}] not matching stored seqNr [$seqNr]")
 

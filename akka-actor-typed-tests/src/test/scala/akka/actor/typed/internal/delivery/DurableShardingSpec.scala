@@ -35,10 +35,13 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
         Duration.Zero,
         DurableProducerQueue.State(
           currentSeqNr = 5,
-          confirmedSeqNr = 2,
+          highestConfirmedSeqNr = 2,
+          confirmedSeqNr = Map("entity-1" -> 2),
           unconfirmed = Vector(
-            DurableProducerQueue.MessageSent(3, ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")), false),
-            DurableProducerQueue.MessageSent(4, ShardingEnvelope("entity-1", TestConsumer.Job("msg-4")), false))))
+            DurableProducerQueue
+              .MessageSent(3, ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")), false, "entity-1"),
+            DurableProducerQueue
+              .MessageSent(4, ShardingEnvelope("entity-1", TestConsumer.Job("msg-4")), false, "entity-1"))))
 
       val shardingProbe =
         createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
@@ -146,15 +149,18 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
-          DurableProducerQueue
-            .State(2, 0, Vector(MessageSent(1, ShardingEnvelope("entity-1", TestConsumer.Job("msg-1")), ack = false))))
+          DurableProducerQueue.State(
+            2,
+            0,
+            Map.empty,
+            Vector(MessageSent(1, ShardingEnvelope("entity-1", TestConsumer.Job("msg-1")), ack = false, "entity-1"))))
       }
 
       val seq1 = shardingProbe.receiveMessage().message
       seq1.msg should ===(TestConsumer.Job("msg-1"))
       seq1.producer ! ProducerController.Internal.Request(confirmedSeqNr = 1L, upToSeqNr = 5, true, false)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Vector.empty))
+        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Map("entity-1" -> 1), Vector.empty))
       }
 
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-2"))
@@ -162,7 +168,8 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
       seq2.msg should ===(TestConsumer.Job("msg-2"))
       seq2.producer ! ProducerController.Internal.Request(confirmedSeqNr = 1L, upToSeqNr = 5, true, false)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(DurableProducerQueue.State(3, 2, Vector.empty))
+        stateHolder.get() should ===(
+          DurableProducerQueue.State(3, 2, Map("entity-1" -> 1, "entity-2" -> 2), Vector.empty))
       }
 
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
@@ -176,20 +183,21 @@ class DurableShardingSpec extends ScalaTestWithActorTestKit with WordSpecLike wi
 
       producerProbe.awaitAssert {
         stateHolder.get().currentSeqNr should ===(7)
-        stateHolder.get().confirmedSeqNr should ===(2)
+        stateHolder.get().highestConfirmedSeqNr should ===(2)
       }
 
       seq4.producer ! ProducerController.Internal.Ack(seq4.seqNr)
+      // note that confirmation of msg-4 from entity-2 doesn't confirm msg-3 from entity-1
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
           DurableProducerQueue.State(
             7,
             4,
+            Map("entity-1" -> 1, "entity-2" -> 4),
             Vector(
-              // FIXME BUG msg-3 shouldn't be confirmed by this, different entity
-              //MessageSent(5, ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")), ack = false),
-              MessageSent(5, ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")), ack = false),
-              MessageSent(6, ShardingEnvelope("entity-2", TestConsumer.Job("msg-6")), ack = false))))
+              MessageSent(3, ShardingEnvelope("entity-1", TestConsumer.Job("msg-3")), ack = false, "entity-1"),
+              MessageSent(5, ShardingEnvelope("entity-1", TestConsumer.Job("msg-5")), ack = false, "entity-1"),
+              MessageSent(6, ShardingEnvelope("entity-2", TestConsumer.Job("msg-6")), ack = false, "entity-2"))))
       }
 
       testKit.stop(shardingProducerController)

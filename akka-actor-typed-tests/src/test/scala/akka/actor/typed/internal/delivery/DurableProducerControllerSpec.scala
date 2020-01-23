@@ -16,6 +16,7 @@ import org.scalatest.WordSpecLike
 
 class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordSpecLike with LogCapturing {
   import TestConsumer.sequencedMessage
+  import DurableProducerQueue.NoQualifier
 
   private var idCount = 0
   private def nextId(): Int = {
@@ -35,10 +36,11 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordS
         Duration.Zero,
         DurableProducerQueue.State(
           currentSeqNr = 5,
-          confirmedSeqNr = 2,
+          highestConfirmedSeqNr = 2,
+          confirmedSeqNr = Map(NoQualifier -> 2),
           unconfirmed = Vector(
-            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false),
-            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false))))
+            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, NoQualifier),
+            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, NoQualifier))))
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
@@ -87,11 +89,12 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordS
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
-          DurableProducerQueue.State(2, 0, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false))))
+          DurableProducerQueue
+            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
       }
       producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Vector.empty))
+        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Map(NoQualifier -> 1), Vector.empty))
       }
 
       val replyTo = createTestProbe[Long]()
@@ -104,7 +107,11 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with WordS
       producerController ! ProducerController.Internal.Ack(3)
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
-          DurableProducerQueue.State(5, 3, Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true))))
+          DurableProducerQueue.State(
+            5,
+            3,
+            Map(NoQualifier -> 3),
+            Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier))))
       }
 
       testKit.stop(producerController)

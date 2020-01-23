@@ -106,6 +106,7 @@ object ShardingProducerController {
       .narrow
   }
 
+  // FIXME with the ConfirmationQualifier in MessageSent we don't need to store wrapped ShardingEnvelope
   private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
     if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[ShardingEnvelope[A]])
   }
@@ -126,7 +127,7 @@ object ShardingProducerController {
       Behaviors.withStash[InternalCommand](1000) { newStashBuffer => // FIXME stash config
         Behaviors.setup { _ =>
           s.unconfirmed.foreach {
-            case DurableProducerQueue.MessageSent(_, envelope: ShardingEnvelope[A], _) =>
+            case DurableProducerQueue.MessageSent(_, envelope: ShardingEnvelope[A], _, _) =>
               newStashBuffer.stash(Msg(envelope))
           }
           // append other stashed messages after the unconfirmed
@@ -276,6 +277,7 @@ class ShardingProducerController[A: ClassTag](
 
       if (confirmed.nonEmpty) {
         context.log.info("Confirmed seqNr [{}] from entity [{}]", confirmedSeqNr, outState.entityId)
+        context.log.info(s"Confirmed [$confirmed], remaining unconfirmed [$newUnconfirmed]") // FIXME remove
         confirmed.foreach {
           case Unconfirmed(_, _, None) => // no reply
           case Unconfirmed(_, _, Some(replyTo)) =>
@@ -284,7 +286,7 @@ class ShardingProducerController[A: ClassTag](
 
         durableQueue.foreach { d =>
           // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr)
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.entityId)
         }
       }
 
@@ -298,7 +300,7 @@ class ShardingProducerController[A: ClassTag](
           // currentSeqNr is only updated when durableQueue is enabled
           onMessage(msg.envelope.entityId, msg.envelope.message, None, s.currentSeqNr, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, msg.envelope, ack = false), attempt = 1)
+          storeMessageSent(MessageSent(s.currentSeqNr, msg.envelope, ack = false, msg.envelope.entityId), attempt = 1)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1))
         }
 
@@ -306,12 +308,14 @@ class ShardingProducerController[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMessage(entityId, message, Some(replyTo), s.currentSeqNr, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, ShardingEnvelope(entityId, message), ack = true), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, ShardingEnvelope(entityId, message), ack = true, entityId),
+            attempt = 1)
           val newReplyAfterStore = s.replyAfterStore.updated(s.currentSeqNr, replyTo)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1, replyAfterStore = newReplyAfterStore))
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, env: ShardingEnvelope[A], _)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, env: ShardingEnvelope[A], _, _)) =>
         s.replyAfterStore.get(seqNr).foreach { replyTo =>
           context.log.info("Confirmation reply to [{}] after storage", seqNr)
           replyTo ! Done
