@@ -25,7 +25,7 @@ object ShardingConsumerController {
       .narrow
   }
 
-  def waitForStart[A](
+  private def waitForStart[A](
       context: ActorContext[ConsumerController.Command[A]],
       resendLost: Boolean): Behavior[ConsumerController.Command[A]] = {
     Behaviors.withStash(10000) { stashBuffer => // FIXME buffer size

@@ -63,6 +63,8 @@ import akka.util.Timeout
  */
 object ProducerController {
 
+  type SeqNr = Long
+
   sealed trait InternalCommand
 
   sealed trait Command[A] extends InternalCommand
@@ -71,8 +73,8 @@ object ProducerController {
 
   final case class RequestNext[A](
       producerId: String,
-      currentSeqNr: Long,
-      confirmedSeqNr: Long,
+      currentSeqNr: SeqNr,
+      confirmedSeqNr: SeqNr,
       sendNextTo: ActorRef[A],
       askNextTo: ActorRef[MessageWithConfirmation[A]])
 
@@ -87,15 +89,15 @@ object ProducerController {
    * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
    * fully delivered, processed, and confirmed by the consumer.
    */
-  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[Long]) extends InternalCommand
+  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[SeqNr]) extends InternalCommand
 
   object Internal {
-    final case class Request(confirmedSeqNr: Long, upToSeqNr: Long, supportResend: Boolean, viaTimeout: Boolean)
+    final case class Request(confirmedSeqNr: SeqNr, upToSeqNr: SeqNr, supportResend: Boolean, viaTimeout: Boolean)
         extends InternalCommand {
       require(confirmedSeqNr <= upToSeqNr, s"confirmedSeqNr [$confirmedSeqNr] should be <= upToSeqNr [$upToSeqNr]")
     }
-    final case class Resend(fromSeqNr: Long) extends InternalCommand
-    final case class Ack(confirmedSeqNr: Long) extends InternalCommand
+    final case class Resend(fromSeqNr: SeqNr) extends InternalCommand
+    final case class Ack(confirmedSeqNr: SeqNr) extends InternalCommand
   }
 
   private case class Msg[A](msg: A) extends InternalCommand
@@ -112,13 +114,13 @@ object ProducerController {
 
   private final case class State[A](
       requested: Boolean,
-      currentSeqNr: Long,
-      confirmedSeqNr: Long,
-      requestedSeqNr: Long,
-      replyAfterStore: Map[Long, ActorRef[Long]],
+      currentSeqNr: SeqNr,
+      confirmedSeqNr: SeqNr,
+      requestedSeqNr: SeqNr,
+      replyAfterStore: Map[SeqNr, ActorRef[SeqNr]],
       supportResend: Boolean,
       unconfirmed: Vector[ConsumerController.SequencedMessage[A]],
-      firstSeqNr: Long,
+      firstSeqNr: SeqNr,
       producer: ActorRef[ProducerController.RequestNext[A]],
       send: ConsumerController.SequencedMessage[A] => Unit)
 
@@ -298,7 +300,7 @@ private class ProducerController[A: ClassTag](
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
-    def onMsg(m: A, newReplyAfterStore: Map[Long, ActorRef[Long]], ack: Boolean): Behavior[InternalCommand] = {
+    def onMsg(m: A, newReplyAfterStore: Map[SeqNr, ActorRef[SeqNr]], ack: Boolean): Behavior[InternalCommand] = {
       checkOnMsgRequestedState()
       // FIXME adjust all logging, most should probably be debug
       context.log.info("sent [{}]", s.currentSeqNr)
@@ -334,7 +336,7 @@ private class ProducerController[A: ClassTag](
       }
     }
 
-    def onAck(newConfirmedSeqNr: Long): State[A] = {
+    def onAck(newConfirmedSeqNr: SeqNr): State[A] = {
       val (replies, newReplyAfterStore) = s.replyAfterStore.partition { case (seqNr, _) => seqNr <= newConfirmedSeqNr }
       if (replies.nonEmpty)
         context.log.info("Confirmation replies from [{}] to [{}]", replies.head._1, replies.last._1)

@@ -32,7 +32,6 @@ object WorkPullingProducerController {
 
   final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
 
-  // FIXME include demand indicator in RequestNext
   final case class RequestNext[A](sendNextTo: ActorRef[A], askNextTo: ActorRef[MessageWithConfirmation[A]])
 
   /**
@@ -45,9 +44,13 @@ object WorkPullingProducerController {
 
   final case class WorkerStats(numberOfWorkers: Int)
 
+  private type TotalSeqNr = Long
+  private type OutSeqNr = Long
+  private type OutKey = String
+
   private final case class WorkerRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
-  private final case class Ack(outKey: String, confirmedSeqNr: Long) extends InternalCommand
+  private final case class Ack(outKey: OutKey, confirmedSeqNr: OutSeqNr) extends InternalCommand
 
   private case object RegisterConsumerDone extends InternalCommand
 
@@ -62,35 +65,38 @@ object WorkPullingProducerController {
   private final case class OutState[A](
       producerController: ActorRef[ProducerController.Command[A]],
       consumerController: ActorRef[ConsumerController.Command[A]],
-      seqNr: Long,
+      seqNr: OutSeqNr,
       unconfirmed: Vector[Unconfirmed[A]],
       askNextTo: Option[ActorRef[ProducerController.MessageWithConfirmation[A]]]) {
     def confirmationQualifier: ConfirmationQualifier = producerController.path.name
   }
 
-  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, msg: A, replyTo: Option[ActorRef[Done]])
+  private final case class Unconfirmed[A](
+      totalSeqNr: TotalSeqNr,
+      outSeqNr: OutSeqNr,
+      msg: A,
+      replyTo: Option[ActorRef[Done]])
 
   private object State {
     def empty[A]: State[A] = State(1, Set.empty, Map.empty, Map.empty, Map.empty, Map.empty, hasRequested = false)
   }
 
-  // FIXME would be nice with some type aliases for these different String and Long things
   private final case class State[A](
-      currentSeqNr: Long, // only updated when durableQueue is enabled
+      currentSeqNr: TotalSeqNr, // only updated when durableQueue is enabled
       workers: Set[ActorRef[ConsumerController.Command[A]]],
-      out: Map[String, OutState[A]],
+      out: Map[OutKey, OutState[A]],
       // when durableQueue is enabled the worker must be selecting before storage
       // to know the confirmationQualifier up-front
-      preselectedWorkers: Map[Long, PreselectedWorker], // seqNr -> PreselectedWorker
+      preselectedWorkers: Map[TotalSeqNr, PreselectedWorker],
       // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
-      replyAfterStore: Map[Long, ActorRef[Done]],
+      replyAfterStore: Map[TotalSeqNr, ActorRef[Done]],
       // when the worker is deregistered but there are still unconfirmed
-      handOver: Map[Long, HandOver], // seqNr -> HandOver
+      handOver: Map[TotalSeqNr, HandOver],
       hasRequested: Boolean)
 
-  private case class PreselectedWorker(outKey: String, confirmationQualifier: ConfirmationQualifier)
+  private case class PreselectedWorker(outKey: OutKey, confirmationQualifier: ConfirmationQualifier)
 
-  private case class HandOver(oldConfirmationQualifier: ConfirmationQualifier, oldSeqNr: Long)
+  private case class HandOver(oldConfirmationQualifier: ConfirmationQualifier, oldSeqNr: TotalSeqNr)
 
   // registration of workers via Receptionist
   private final case class CurrentWorkers[A](workers: Set[ActorRef[ConsumerController.Command[A]]])
@@ -98,7 +104,10 @@ object WorkPullingProducerController {
 
   private final case class Msg[A](msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Done]]) extends InternalCommand
 
-  private final case class ResendDurableMsg[A](msg: A, oldConfirmationQualifier: ConfirmationQualifier, oldSeqNr: Long)
+  private final case class ResendDurableMsg[A](
+      msg: A,
+      oldConfirmationQualifier: ConfirmationQualifier,
+      oldSeqNr: TotalSeqNr)
       extends InternalCommand
 
   def apply[A: ClassTag](
@@ -233,7 +242,7 @@ class WorkPullingProducerController[A: ClassTag](
 
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
-    def onMessage(msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Done]], totalSeqNr: Long): State[A] = {
+    def onMessage(msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Done]], totalSeqNr: TotalSeqNr): State[A] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
       context.log.infoN(
         "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}]",
@@ -274,7 +283,7 @@ class WorkPullingProducerController[A: ClassTag](
           val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, msg, replyTo)
           val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, askNextTo = None))
           implicit val askTimeout: Timeout = 60.seconds // FIXME config
-          context.ask[ProducerController.MessageWithConfirmation[A], Long](
+          context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
             out.askNextTo.get,
             ProducerController.MessageWithConfirmation(msg, _)) {
             case Success(seqNr) => Ack(outKey, seqNr)
@@ -324,7 +333,7 @@ class WorkPullingProducerController[A: ClassTag](
       }
     }
 
-    def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
+    def onAck(outState: OutState[A], confirmedSeqNr: OutSeqNr): Vector[Unconfirmed[A]] = {
       val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
         case Unconfirmed(_, seqNr, _, _) => seqNr <= confirmedSeqNr
       }
@@ -347,10 +356,10 @@ class WorkPullingProducerController[A: ClassTag](
       newUnconfirmed
     }
 
-    def workersWithDemand: Vector[(String, OutState[A])] =
+    def workersWithDemand: Vector[(OutKey, OutState[A])] =
       s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
 
-    def selectWorker(): Option[(String, OutState[A])] = {
+    def selectWorker(): Option[(OutKey, OutState[A])] = {
       val preselected = s.preselectedWorkers.valuesIterator.map(_.outKey).toSet
       val workers = workersWithDemand.filterNot {
         case (outKey, _) => preselected(outKey)
@@ -459,13 +468,14 @@ class WorkPullingProducerController[A: ClassTag](
         }
 
       case curr: CurrentWorkers[A] =>
-        // FIXME adjust all logging, most should probably be debug
+        // TODO we could also track unreachable workers and avoid them when selecting worker
         val addedWorkers = curr.workers.diff(s.workers)
         val removedWorkers = s.workers.diff(curr.workers)
 
         val newState = addedWorkers.foldLeft(s) { (acc, c) =>
           val uuid = UUID.randomUUID().toString
           val outKey = s"$producerId-$uuid"
+          // FIXME adjust all logging, most should probably be debug
           context.log.info2("Registered worker [{}], with producerId [{}]", c, outKey)
           val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None), uuid)
           p ! ProducerController.Start(workerRequestNextAdapter)
@@ -541,7 +551,7 @@ class WorkPullingProducerController[A: ClassTag](
       case RegisterConsumerDone =>
         Behaviors.same
 
-      // FIXME case Start register of new produce, e.g. restart
+      // FIXME case Start register of new producer, e.g. restart
 
     }
   }

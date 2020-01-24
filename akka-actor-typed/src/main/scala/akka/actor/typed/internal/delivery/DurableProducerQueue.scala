@@ -10,6 +10,8 @@ import akka.actor.typed.ActorRef
 // FIXME how much of this should be public? Should it be possible to plug-in different implementation?
 object DurableProducerQueue {
 
+  type SeqNr = Long
+
   type ConfirmationQualifier = String
 
   val NoQualifier: ConfirmationQualifier = ""
@@ -20,20 +22,20 @@ object DurableProducerQueue {
 
   final case class StoreMessageSent[A](sent: MessageSent[A], replyTo: ActorRef[StoreMessageSentAck]) extends Command[A]
 
-  final case class StoreMessageSentAck(storedSeqNr: Long)
+  final case class StoreMessageSentAck(storedSeqNr: SeqNr)
 
-  final case class StoreMessageConfirmed[A](seqNr: Long, confirmationQualifier: ConfirmationQualifier)
+  final case class StoreMessageConfirmed[A](seqNr: SeqNr, confirmationQualifier: ConfirmationQualifier)
       extends Command[A]
 
   object State {
     def empty[A]: State[A] = State(1L, 0L, Map.empty, Vector.empty)
   }
   final case class State[A](
-      currentSeqNr: Long,
-      highestConfirmedSeqNr: Long,
-      confirmedSeqNr: Map[ConfirmationQualifier, Long],
+      currentSeqNr: SeqNr,
+      highestConfirmedSeqNr: SeqNr,
+      confirmedSeqNr: Map[ConfirmationQualifier, SeqNr],
       unconfirmed: Vector[MessageSent[A]])
 
-  final case class MessageSent[A](seqNr: Long, msg: A, ack: Boolean, confirmationQualifier: ConfirmationQualifier)
+  final case class MessageSent[A](seqNr: SeqNr, msg: A, ack: Boolean, confirmationQualifier: ConfirmationQualifier)
 
 }

@@ -55,17 +55,19 @@ import akka.annotation.InternalApi
  */
 object ConsumerController {
 
+  type SeqNr = Long
+
   sealed trait InternalCommand
   sealed trait Command[+A] extends InternalCommand
-  final case class SequencedMessage[A](producerId: String, seqNr: Long, msg: A, first: Boolean, ack: Boolean)(
+  final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, msg: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerController.InternalCommand])
       extends Command[A]
   private final case object Retry extends InternalCommand
 
-  final case class Delivery[A](producerId: String, seqNr: Long, msg: A, confirmTo: ActorRef[Confirmed])
+  final case class Delivery[A](producerId: String, seqNr: SeqNr, msg: A, confirmTo: ActorRef[Confirmed])
   final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
-  final case class Confirmed(seqNr: Long) extends InternalCommand
+  final case class Confirmed(seqNr: SeqNr) extends InternalCommand
 
   final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
       extends Command[A]
@@ -75,9 +77,9 @@ object ConsumerController {
   private final case class State[A](
       producer: ActorRef[ProducerController.InternalCommand],
       consumer: ActorRef[ConsumerController.Delivery[A]],
-      receivedSeqNr: Long,
-      confirmedSeqNr: Long,
-      requestedSeqNr: Long)
+      receivedSeqNr: SeqNr,
+      confirmedSeqNr: SeqNr,
+      requestedSeqNr: SeqNr)
 
   private val RequestWindow = 20 // FIXME should be a param, ofc
 
@@ -91,7 +93,7 @@ object ConsumerController {
                 producerId: String,
                 producer: ActorRef[ProducerController.InternalCommand],
                 start: Start[A],
-                firstSeqNr: Long): Behavior[InternalCommand] = {
+                firstSeqNr: SeqNr): Behavior[InternalCommand] = {
               val requestedSeqNr = firstSeqNr - 1 + RequestWindow
 
               // FIXME adjust all logging, most should probably be debug
@@ -119,7 +121,7 @@ object ConsumerController {
                 register: Option[ActorRef[ProducerController.Command[A]]],
                 producer: Option[(String, ActorRef[ProducerController.InternalCommand])],
                 start: Option[Start[A]],
-                firstSeqNr: Long): Behavior[InternalCommand] = {
+                firstSeqNr: SeqNr): Behavior[InternalCommand] = {
               Behaviors.receiveMessagePartial {
                 case reg: RegisterToProducerController[A] @unchecked =>
                   reg.producerController ! ProducerController.RegisterConsumer(ctx.self)
@@ -390,7 +392,7 @@ private class ConsumerController[A](
     s.copy(requestedSeqNr = newRequestedSeqNr)
   }
 
-  private def checkProducerId(producerId: String, incomingProducerId: String, seqNr: Long): Unit = {
+  private def checkProducerId(producerId: String, incomingProducerId: String, seqNr: SeqNr): Unit = {
     if (incomingProducerId != producerId)
       throw new IllegalArgumentException(
         s"Unexpected producerId, expected [$producerId], received [$incomingProducerId], " +
@@ -401,7 +403,7 @@ private class ConsumerController[A](
       producer: ActorRef[ProducerController.InternalCommand],
       seqMsg: SequencedMessage[A],
       producerId: String,
-      seqNr: Long): Unit = {
+      seqNr: SeqNr): Unit = {
     if (seqMsg.producer != producer)
       context.log.infoN(
         "changing producer [{}] from [{}] to [{}], seqNr [{}]",

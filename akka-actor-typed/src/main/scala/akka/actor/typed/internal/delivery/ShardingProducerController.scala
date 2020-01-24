@@ -22,6 +22,8 @@ import akka.util.Timeout
 
 object ShardingProducerController {
 
+  type EntityId = String
+
   sealed trait InternalCommand
 
   sealed trait Command[A] extends InternalCommand
@@ -37,16 +39,33 @@ object ShardingProducerController {
    * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
    * fully delivered, processed, and confirmed by the consumer.
    */
-  final case class MessageWithConfirmation[A](entityId: String, message: A, replyTo: ActorRef[Done])
+  final case class MessageWithConfirmation[A](entityId: EntityId, message: A, replyTo: ActorRef[Done])
       extends InternalCommand
-
-  private final case class Ack(outKey: String, confirmedSeqNr: Long) extends InternalCommand
 
   final case class RequestNext[A](
       sendNextTo: ActorRef[ShardingEnvelope[A]],
       askNextTo: ActorRef[MessageWithConfirmation[A]],
-      entitiesWithDemand: Set[String],
-      bufferedForEntitiesWithoutDemand: Map[String, Int])
+      entitiesWithDemand: Set[EntityId],
+      bufferedForEntitiesWithoutDemand: Map[EntityId, Int]) {
+
+    /** Java API */
+    def getEntitiesWithDemand: java.util.Set[String] = {
+      import akka.util.ccompat.JavaConverters._
+      entitiesWithDemand.asJava
+    }
+
+    /** Java API */
+    def getBufferedForEntitiesWithoutDemand: java.util.Map[String, Integer] = {
+      import akka.util.ccompat.JavaConverters._
+      bufferedForEntitiesWithoutDemand.mapValues(_.asInstanceOf[Integer]).asJava
+    }
+  }
+
+  private type TotalSeqNr = Long
+  private type OutSeqNr = Long
+  private type OutKey = String
+
+  private final case class Ack(outKey: OutKey, confirmedSeqNr: OutSeqNr) extends InternalCommand
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
@@ -61,25 +80,25 @@ object ShardingProducerController {
       extends InternalCommand
 
   private final case class OutState[A](
-      entityId: String,
+      entityId: EntityId,
       producerController: ActorRef[ProducerController.Command[A]],
       nextTo: Option[ProducerController.RequestNext[A]],
       buffered: Vector[Buffered[A]],
-      seqNr: Long,
+      seqNr: OutSeqNr,
       unconfirmed: Vector[Unconfirmed[A]]) {
     if (nextTo.nonEmpty && buffered.nonEmpty)
       throw new IllegalStateException("nextTo and buffered shouldn't both be nonEmpty.")
   }
 
-  private final case class Buffered[A](totalSeqNr: Long, msg: A, replyTo: Option[ActorRef[Done]])
+  private final case class Buffered[A](totalSeqNr: TotalSeqNr, msg: A, replyTo: Option[ActorRef[Done]])
 
-  private final case class Unconfirmed[A](totalSeqNr: Long, outSeqNr: Long, replyTo: Option[ActorRef[Done]])
+  private final case class Unconfirmed[A](totalSeqNr: TotalSeqNr, outSeqNr: OutSeqNr, replyTo: Option[ActorRef[Done]])
 
   private final case class State[A](
-      currentSeqNr: Long,
-      out: Map[String, OutState[A]],
+      currentSeqNr: TotalSeqNr,
+      out: Map[OutKey, OutState[A]],
       // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
-      replyAfterStore: Map[Long, ActorRef[Done]])
+      replyAfterStore: Map[TotalSeqNr, ActorRef[Done]])
 
   def apply[A: ClassTag](
       producerId: String,
@@ -220,11 +239,11 @@ class ShardingProducerController[A: ClassTag](
   private def active(s: State[A]): Behavior[InternalCommand] = {
 
     def onMessage(
-        entityId: String,
+        entityId: EntityId,
         msg: A,
         replyTo: Option[ActorRef[Done]],
-        totalSeqNr: Long,
-        newReplyAfterStore: Map[Long, ActorRef[Done]]): Behavior[InternalCommand] = {
+        totalSeqNr: TotalSeqNr,
+        newReplyAfterStore: Map[TotalSeqNr, ActorRef[Done]]): Behavior[InternalCommand] = {
 
       val outKey = s"$producerId-$entityId"
       val newState =
@@ -265,7 +284,7 @@ class ShardingProducerController[A: ClassTag](
       active(newState)
     }
 
-    def onAck(outState: OutState[A], confirmedSeqNr: Long): Vector[Unconfirmed[A]] = {
+    def onAck(outState: OutState[A], confirmedSeqNr: OutSeqNr): Vector[Unconfirmed[A]] = {
       val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
         case Unconfirmed(_, seqNr, _) => seqNr <= confirmedSeqNr
       }
@@ -383,16 +402,16 @@ class ShardingProducerController[A: ClassTag](
     RequestNext(msgAdapter, context.self, entitiesWithDemand, bufferedForEntitesWithoutDemand)
   }
 
-  private def send(msg: A, outKey: String, outSeqNr: Long, nextTo: ProducerController.RequestNext[A]): Unit = {
+  private def send(msg: A, outKey: OutKey, outSeqNr: OutSeqNr, nextTo: ProducerController.RequestNext[A]): Unit = {
     context.log.info("send [{}], outSeqNr [{}]", msg, outSeqNr) // FIXME remove
     implicit val askTimeout: Timeout = 60.seconds // FIXME config
-    context.ask[ProducerController.MessageWithConfirmation[A], Long](
+    context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
       nextTo.askNextTo,
       ProducerController.MessageWithConfirmation(msg, _)) {
       case Success(seqNr) =>
         if (seqNr != outSeqNr)
           context.log.error("Inconsistent Ack seqNr [{}] != [{}]", seqNr, outSeqNr)
-        Ack(outKey, outSeqNr)
+        Ack(outKey, seqNr)
       case Failure(exc) =>
         throw exc // FIXME what to do for AskTimeout? can probably be ignored since actual producer ask will have it's own timeout
     }
