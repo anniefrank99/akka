@@ -8,6 +8,7 @@ import akka.actor.typed.ActorRef
 
 // Implement with EventSourceBehavior in akka-persistence-typed
 // FIXME how much of this should be public? Should it be possible to plug-in different implementation?
+// FIXME consider a Future based SPI instead if we make it public
 object DurableProducerQueue {
 
   type SeqNr = Long

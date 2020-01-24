@@ -57,7 +57,7 @@ object ShardingProducerController {
     /** Java API */
     def getBufferedForEntitiesWithoutDemand: java.util.Map[String, Integer] = {
       import akka.util.ccompat.JavaConverters._
-      bufferedForEntitiesWithoutDemand.mapValues(_.asInstanceOf[Integer]).asJava
+      bufferedForEntitiesWithoutDemand.iterator.map { case (k, v) => k -> v.asInstanceOf[Integer] }.toMap.asJava
     }
   }
 
@@ -96,6 +96,9 @@ object ShardingProducerController {
 
   private final case class State[A](
       currentSeqNr: TotalSeqNr,
+      // FIXME some cleanup mechanism of entities that haven't been used for a while.
+      //       Maybe we can watch the corresponding ConsumerController, to be notified of entity passivation.
+      //       It should still survive a rebalance, so some idle time aspect is still needed.
       out: Map[OutKey, OutState[A]],
       // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
       replyAfterStore: Map[TotalSeqNr, ActorRef[Done]])
