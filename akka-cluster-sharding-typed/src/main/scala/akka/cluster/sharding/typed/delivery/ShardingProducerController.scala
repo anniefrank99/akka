@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.delivery
+package akka.cluster.sharding.typed.delivery
 
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
@@ -12,13 +12,14 @@ import scala.util.Success
 import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
-import akka.actor.typed.delivery.SimuatedSharding.ShardingEnvelope
+import akka.actor.typed.delivery.ConsumerController
+import akka.actor.typed.delivery.DurableProducerQueue
+import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.StashBuffer
+import akka.cluster.sharding.typed.ShardingEnvelope
 import akka.util.Timeout
-
-// FIXME this will be moved to akka-cluster-sharding-typed
 
 object ShardingProducerController {
 
@@ -69,7 +70,9 @@ object ShardingProducerController {
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
-  private final case class Msg[A](envelope: ShardingEnvelope[A]) extends InternalCommand
+  private final case class Msg[A](envelope: ShardingEnvelope[A], alreadyStored: TotalSeqNr) extends InternalCommand {
+    def isAlreadyStored: Boolean = alreadyStored > 0
+  }
 
   private case class LoadStateReply[A](state: DurableProducerQueue.State[A]) extends InternalCommand
   private case class LoadStateFailed(attempt: Int) extends InternalCommand
@@ -127,6 +130,8 @@ object ShardingProducerController {
       .narrow
   }
 
+  // FIXME javadsl create
+
   private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
     if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[A])
   }
@@ -145,12 +150,12 @@ object ShardingProducerController {
       Behaviors.withStash[InternalCommand](1000) { newStashBuffer => // FIXME stash config
         Behaviors.setup { _ =>
           s.unconfirmed.foreach { m =>
-            newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.msg)))
+            newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.msg), alreadyStored = m.seqNr))
           }
           // append other stashed messages after the unconfirmed
           stashBuffer.foreach(newStashBuffer.stash)
 
-          val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg))
+          val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, alreadyStored = 0))
           if (s.unconfirmed.isEmpty)
             p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
           val b = new ShardingProducerController(context, producerId, p, msgAdapter, region, durableQueue)
@@ -230,11 +235,11 @@ class ShardingProducerController[A: ClassTag](
     msgAdapter: ActorRef[ShardingEnvelope[A]],
     region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
     durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]]) {
-  import ShardingProducerController._
+  import DurableProducerQueue.MessageSent
+  import DurableProducerQueue.StoreMessageConfirmed
   import DurableProducerQueue.StoreMessageSent
   import DurableProducerQueue.StoreMessageSentAck
-  import DurableProducerQueue.StoreMessageConfirmed
-  import DurableProducerQueue.MessageSent
+  import ShardingProducerController._
 
   private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WrappedRequestNext.apply)
@@ -294,7 +299,6 @@ class ShardingProducerController[A: ClassTag](
 
       if (confirmed.nonEmpty) {
         context.log.info("Confirmed seqNr [{}] from entity [{}]", confirmedSeqNr, outState.entityId)
-        context.log.info(s"Confirmed [$confirmed], remaining unconfirmed [$newUnconfirmed]") // FIXME remove
         confirmed.foreach {
           case Unconfirmed(_, _, None) => // no reply
           case Unconfirmed(_, _, Some(replyTo)) =>
@@ -316,6 +320,9 @@ class ShardingProducerController[A: ClassTag](
         if (durableQueue.isEmpty) {
           // currentSeqNr is only updated when durableQueue is enabled
           onMessage(msg.envelope.entityId, msg.envelope.message, None, s.currentSeqNr, s.replyAfterStore)
+        } else if (msg.isAlreadyStored) {
+          // loaded from durable queue, currentSeqNr has already b
+          onMessage(msg.envelope.entityId, msg.envelope.message, None, msg.alreadyStored, s.replyAfterStore)
         } else {
           storeMessageSent(MessageSent(s.currentSeqNr, msg.envelope.message, false, msg.envelope.entityId), attempt = 1)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1))

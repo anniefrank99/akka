@@ -56,7 +56,7 @@ private class EventSourcedProducerQueue[A](context: ActorContext[DurableProducer
     command match {
       case StoreMessageSent(sent, replyTo) =>
         if (sent.seqNr == state.currentSeqNr) {
-          context.log.debug(
+          context.log.info(
             "StoreMessageSent seqNr [{}], confirmationQualifier [{}]",
             sent.seqNr,
             sent.confirmationQualifier)

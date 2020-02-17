@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.delivery
+package akka.cluster.sharding.typed.delivery
 
 import scala.concurrent.duration._
 
@@ -12,12 +12,25 @@ import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController.SequencedMessage
-import akka.actor.typed.delivery.SimuatedSharding.ShardingEnvelope
+import akka.actor.typed.delivery.ProducerController
+import akka.actor.typed.delivery.TestConsumer
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
+import akka.cluster.typed.Cluster
+import akka.cluster.sharding.typed.ShardingEnvelope
+import akka.cluster.sharding.typed.scaladsl.ClusterSharding
+import akka.cluster.sharding.typed.scaladsl.Entity
+import akka.cluster.sharding.typed.scaladsl.EntityTypeKey
+import akka.cluster.typed.Join
+import com.typesafe.config.ConfigFactory
 import org.scalatest.wordspec.AnyWordSpecLike
 
 object ReliableDeliveryShardingSpec {
+  val config = ConfigFactory.parseString("""
+    akka.actor.provider = cluster
+    akka.remote.classic.netty.tcp.port = 0
+    akka.remote.artery.canonical.port = 0
+    """)
 
   object TestShardingProducer {
 
@@ -69,7 +82,10 @@ object ReliableDeliveryShardingSpec {
 
 }
 
-class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class ReliableDeliveryShardingSpec
+    extends ScalaTestWithActorTestKit(ReliableDeliveryShardingSpec.config)
+    with AnyWordSpecLike
+    with LogCapturing {
   import ReliableDeliveryShardingSpec._
   import TestConsumer.defaultConsumerDelay
 
@@ -82,18 +98,21 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWor
   private def producerId: String = s"p-$idCount"
 
   "ReliableDelivery with sharding" must {
+    "join cluster" in {
+      Cluster(system).manager ! Join(Cluster(system).selfMember.address)
+    }
 
     "illustrate sharding usage" in {
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        spawn(
-          SimuatedSharding(
+        ClusterSharding(system).init(
+          Entity(typeKey)(
             _ =>
               ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
                 c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
-                resendLost = true)),
-          s"sharding-$idCount")
+                resendLost = true)))
 
       val shardingController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
@@ -104,20 +123,19 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWor
 
       testKit.stop(producer)
       testKit.stop(shardingController)
-      testKit.stop(sharding)
     }
 
     "illustrate sharding usage with several producers" in {
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        spawn(
-          SimuatedSharding(
+        ClusterSharding(system).init(
+          Entity(typeKey)(
             _ =>
               ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
                 c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
-                resendLost = true)),
-          s"sharding-$idCount")
+                resendLost = true)))
 
       val shardingController1 =
         spawn(
@@ -153,20 +171,19 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWor
       testKit.stop(producer2)
       testKit.stop(shardingController1)
       testKit.stop(shardingController2)
-      testKit.stop(sharding)
     }
 
     "reply to MessageWithConfirmation" in {
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        spawn(
-          SimuatedSharding(
+        ClusterSharding(system).init(
+          Entity(typeKey)(
             _ =>
               ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
                 c => TestConsumer(defaultConsumerDelay, 3, consumerEndProbe.ref, c),
-                resendLost = true)),
-          s"sharding-$idCount")
+                resendLost = true)))
 
       val shardingController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
@@ -206,7 +223,6 @@ class ReliableDeliveryShardingSpec extends ScalaTestWithActorTestKit with AnyWor
       consumerEndProbe.receiveMessage() // entity-0 received 3 messages
 
       testKit.stop(shardingController)
-      testKit.stop(sharding)
     }
 
     "include demand information in RequestNext" in {

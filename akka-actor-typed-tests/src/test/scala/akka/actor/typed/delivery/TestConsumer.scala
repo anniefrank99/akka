@@ -18,7 +18,7 @@ object TestConsumer {
 
   final case class Job(payload: String)
   sealed trait Command
-  private final case class JobDelivery(
+  final case class JobDelivery(
       producerId: String,
       seqNr: Long,
       msg: Job,

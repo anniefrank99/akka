@@ -2,17 +2,17 @@
  * Copyright (C) 2020-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.delivery
+package akka.cluster.sharding.typed.delivery
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.Terminated
+import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 
 object ShardingConsumerController {
   def apply[A, B](
-      // FIXME EntityContext parameter in consumerBehavior factory
       consumerBehavior: ActorRef[ConsumerController.Start[A]] => Behavior[B],
       resendLost: Boolean): Behavior[ConsumerController.SequencedMessage[A]] = {
     Behaviors
@@ -24,6 +24,8 @@ object ShardingConsumerController {
       }
       .narrow
   }
+
+  // FIXME javadsl create
 
   private def waitForStart[A](
       context: ActorContext[ConsumerController.Command[A]],
