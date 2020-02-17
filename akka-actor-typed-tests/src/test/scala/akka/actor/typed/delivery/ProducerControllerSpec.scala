@@ -2,13 +2,13 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import scala.concurrent.duration._
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-import akka.actor.typed.internal.delivery.ProducerController.MessageWithConfirmation
+import ProducerController.MessageWithConfirmation
 import org.scalatest.wordspec.AnyWordSpecLike
 
 class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {

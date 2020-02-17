@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import java.util.concurrent.atomic.AtomicReference
 
@@ -12,7 +12,7 @@ import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
-import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
+import DurableProducerQueue.MessageSent
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import org.scalatest.wordspec.AnyWordSpecLike

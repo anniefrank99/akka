@@ -7,8 +7,8 @@ package akka.persistence.typed.delivery
 import java.util.UUID
 
 import akka.actor.testkit.typed.scaladsl._
-import akka.actor.typed.internal.delivery.ConsumerController
-import akka.actor.typed.internal.delivery.ProducerController
+import akka.actor.typed.delivery.ConsumerController
+import akka.actor.typed.delivery.ProducerController
 import akka.persistence.typed.PersistenceId
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory

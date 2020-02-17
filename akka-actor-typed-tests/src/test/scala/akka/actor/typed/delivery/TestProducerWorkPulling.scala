@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import scala.concurrent.duration.FiniteDuration
 

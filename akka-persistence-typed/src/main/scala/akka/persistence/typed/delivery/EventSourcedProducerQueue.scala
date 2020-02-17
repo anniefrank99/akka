@@ -8,7 +8,7 @@ import scala.concurrent.duration._
 
 import akka.actor.typed.Behavior
 import akka.actor.typed.SupervisorStrategy
-import akka.actor.typed.internal.delivery.DurableProducerQueue
+import akka.actor.typed.delivery.DurableProducerQueue
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.persistence.typed.PersistenceId
@@ -17,7 +17,7 @@ import akka.persistence.typed.scaladsl.EventSourcedBehavior
 import akka.persistence.typed.scaladsl.RetentionCriteria
 
 /**
- * [[DurableProducerQueue]] that can be used with [[akka.actor.typed.internal.delivery.ProducerController]]
+ * [[DurableProducerQueue]] that can be used with [[akka.actor.typed.delivery.ProducerController]]
  * for reliable delivery of messages. It is implemented with event sourcing and stores one
  * event before sending the message to the destination and one event for the confirmation
  * that the message has been delivered and processed.

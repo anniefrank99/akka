@@ -9,14 +9,14 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import akka.actor.testkit.typed.scaladsl._
 import akka.actor.typed.eventstream.EventStream
-import akka.actor.typed.internal.delivery.DurableProducerQueue.Confirmed
-import akka.actor.typed.internal.delivery.DurableProducerQueue.LoadState
-import akka.actor.typed.internal.delivery.DurableProducerQueue.MessageSent
-import akka.actor.typed.internal.delivery.DurableProducerQueue.NoQualifier
-import akka.actor.typed.internal.delivery.DurableProducerQueue.State
-import akka.actor.typed.internal.delivery.DurableProducerQueue.StoreMessageConfirmed
-import akka.actor.typed.internal.delivery.DurableProducerQueue.StoreMessageSent
-import akka.actor.typed.internal.delivery.DurableProducerQueue.StoreMessageSentAck
+import akka.actor.typed.delivery.DurableProducerQueue.Confirmed
+import akka.actor.typed.delivery.DurableProducerQueue.LoadState
+import akka.actor.typed.delivery.DurableProducerQueue.MessageSent
+import akka.actor.typed.delivery.DurableProducerQueue.NoQualifier
+import akka.actor.typed.delivery.DurableProducerQueue.State
+import akka.actor.typed.delivery.DurableProducerQueue.StoreMessageConfirmed
+import akka.actor.typed.delivery.DurableProducerQueue.StoreMessageSent
+import akka.actor.typed.delivery.DurableProducerQueue.StoreMessageSentAck
 import akka.persistence.journal.inmem.InmemJournal
 import akka.persistence.typed.PersistenceId
 import com.typesafe.config.Config

@@ -2,7 +2,7 @@
  * Copyright (C) 2020-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior

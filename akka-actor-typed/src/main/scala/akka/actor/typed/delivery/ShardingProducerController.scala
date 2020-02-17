@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
@@ -12,7 +12,7 @@ import scala.util.Success
 import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
-import akka.actor.typed.internal.delivery.SimuatedSharding.ShardingEnvelope
+import akka.actor.typed.delivery.SimuatedSharding.ShardingEnvelope
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.StashBuffer

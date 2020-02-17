@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
@@ -22,7 +22,7 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
 import akka.util.Timeout
-import akka.actor.typed.internal.delivery.DurableProducerQueue.ConfirmationQualifier
+import DurableProducerQueue.ConfirmationQualifier
 
 object WorkPullingProducerController {
 

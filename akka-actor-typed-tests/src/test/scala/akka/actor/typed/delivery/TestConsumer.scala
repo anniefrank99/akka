@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2020 Lightbend Inc. <https://www.lightbend.com>
  */
 
-package akka.actor.typed.internal.delivery
+package akka.actor.typed.delivery
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
@@ -10,7 +10,7 @@ import scala.concurrent.duration._
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
-import akka.actor.typed.internal.delivery.ConsumerController.SequencedMessage
+import ConsumerController.SequencedMessage
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 
