@@ -94,6 +94,78 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       testKit.stop(consumerController2)
     }
 
+    "deliver messages after producer restart, keeping same ConsumerController" in {
+      val producerId = "p2"
+      val producerProbe = createTestProbe[ProducerController.RequestNext[String]]()
+
+      val producerController = spawn(
+        ProducerController[String](
+          producerId,
+          Some(EventSourcedProducerQueue[String](PersistenceId.ofUniqueId(producerId)))))
+      producerController ! ProducerController.Start(producerProbe.ref)
+
+      val consumerController = spawn(ConsumerController[String](resendLost = true))
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[String]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController)
+
+      producerProbe.receiveMessage().sendNextTo ! "a"
+      producerProbe.receiveMessage().sendNextTo ! "b"
+      producerProbe.receiveMessage().sendNextTo ! "c"
+      producerProbe.receiveMessage()
+
+      val delivery1 = consumerProbe.receiveMessage()
+      delivery1.msg should ===("a")
+
+      testKit.stop(producerController)
+
+      // TODO how should consumer notice that producerController has stopped?
+      // Maybe it should just watch it, since it is anyway responsible for RegisterToProducerController
+      consumerProbe.expectTerminated(producerController)
+
+      // FIXME write similar test for sharding, where RegisterToProducerController isn't used, but
+      // the ConsumerController just receives a new first SeqMsg from new ProducerController.
+
+      val producerController2 = spawn(
+        ProducerController[String](
+          producerId,
+          Some(EventSourcedProducerQueue[String](PersistenceId.ofUniqueId(producerId)))))
+      producerController2 ! ProducerController.Start(producerProbe.ref)
+      consumerController ! ConsumerController.RegisterToProducerController(producerController2)
+
+      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
+
+      val requestNext4 = producerProbe.receiveMessage()
+      requestNext4.currentSeqNr should ===(4)
+      requestNext4.sendNextTo ! "d"
+
+      // TODO Should we try harder to deduplicate first?
+      val redelivery1 = consumerProbe.receiveMessage()
+      redelivery1.msg should ===("a")
+      redelivery1.confirmTo ! ConsumerController.Confirmed(redelivery1.seqNr)
+
+      producerProbe.receiveMessage().sendNextTo ! "e"
+
+      val redelivery2 = consumerProbe.receiveMessage()
+      redelivery2.msg should ===("b")
+      redelivery2.confirmTo ! ConsumerController.Confirmed(redelivery2.seqNr)
+
+      val redelivery3 = consumerProbe.receiveMessage()
+      redelivery3.msg should ===("c")
+      redelivery3.confirmTo ! ConsumerController.Confirmed(redelivery3.seqNr)
+
+      val delivery4 = consumerProbe.receiveMessage()
+      delivery4.msg should ===("d")
+      delivery4.confirmTo ! ConsumerController.Confirmed(delivery4.seqNr)
+
+      val delivery5 = consumerProbe.receiveMessage()
+      delivery5.msg should ===("e")
+      delivery5.confirmTo ! ConsumerController.Confirmed(delivery5.seqNr)
+
+      testKit.stop(producerController)
+      testKit.stop(consumerController)
+    }
+
   }
 
 }

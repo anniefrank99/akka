@@ -79,9 +79,12 @@ object ConsumerController {
       consumer: ActorRef[ConsumerController.Delivery[A]],
       receivedSeqNr: SeqNr,
       confirmedSeqNr: SeqNr,
-      requestedSeqNr: SeqNr)
+      requestedSeqNr: SeqNr,
+      registering: Option[ActorRef[ProducerController.Command[A]]])
 
   private val RequestWindow = 20 // FIXME should be a param, ofc
+
+  // FIXME convenience for resendLost = true, since that should be the normal default
 
   def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
     Behaviors
@@ -109,8 +112,14 @@ object ConsumerController {
                 resendLost,
                 viaTimeout = false)
 
-              val next = new ConsumerController[A](ctx, timers, producerId, stashBuffer, resendLost)
-                .active(State(producer, start.deliverTo, receivedSeqNr = 0, confirmedSeqNr = 0, requestedSeqNr))
+              val next = new ConsumerController[A](ctx, timers, producerId, stashBuffer, resendLost).active(
+                State(
+                  producer,
+                  start.deliverTo,
+                  receivedSeqNr = 0,
+                  confirmedSeqNr = 0,
+                  requestedSeqNr,
+                  registering = None))
               if (stashBuffer.nonEmpty)
                 ctx.log.info("Unstash [{}]", stashBuffer.size)
               stashBuffer.unstashAll(next)
@@ -125,7 +134,7 @@ object ConsumerController {
               Behaviors.receiveMessagePartial {
                 case reg: RegisterToProducerController[A] @unchecked =>
                   reg.producerController ! ProducerController.RegisterConsumer(ctx.self)
-                  idle(Some(reg.producerController), producer, start, firstSeqNr)
+                  idle(Some(reg.producerController), producer = None, start, firstSeqNr)
 
                 case s: Start[A] @unchecked =>
                   start.foreach(previous => ctx.unwatch(previous.deliverTo))
@@ -200,34 +209,58 @@ private class ConsumerController[A](
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
         checkProducerId(producerId, pid, seqNr)
-
         val expectedSeqNr = s.receivedSeqNr + 1
-        if (isExpected(s, seqMsg)) {
+
+        if (s.registering.isDefined && !seqMsg.first) {
+          context.log.infoN(
+            "from producer [{}], discarding message because registering to new ProducerController, seqNr [{}]",
+            pid,
+            seqNr)
+          Behaviors.same
+        } else if (seqMsg.producer != s.producer && !seqMsg.first) {
+          context.log.infoN(
+            "from producer [{}], discarding message because unexpected producer ActorRef, seqNr [{}]",
+            pid,
+            seqNr)
+          Behaviors.same
+        } else if (isExpected(s, seqMsg)) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
           waitingForConfirmation(
-            s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, requestedSeqNr = s.requestedSeqNr),
+            s.copy(
+              producer = seqMsg.producer,
+              receivedSeqNr = seqNr,
+              requestedSeqNr = s.requestedSeqNr,
+              registering = updatedRegistering(s, seqMsg)),
             seqMsg)
         } else if (seqNr > expectedSeqNr) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           context.log.infoN("from producer [{}], missing [{}], received [{}]", pid, expectedSeqNr, seqNr)
           if (resendLost) {
             seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
-            resending(s.copy(producer = seqMsg.producer))
+            resending(s.copy(producer = seqMsg.producer, registering = updatedRegistering(s, seqMsg)))
           } else {
             s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
-            waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), seqMsg)
+            waitingForConfirmation(
+              s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
+              seqMsg)
           }
         } else { // seqNr < expectedSeqNr
           context.log.infoN("from producer [{}], deduplicate [{}], expected [{}]", pid, seqNr, expectedSeqNr)
           if (seqMsg.first)
-            active(retryRequest(s))
+            active(retryRequest(s).copy(registering = updatedRegistering(s, seqMsg)))
           else
-            Behaviors.same
+            active(s.copy(registering = updatedRegistering(s, seqMsg)))
         }
 
       case Retry =>
-        active(retryRequest(s))
+        s.registering match {
+          case None =>
+            active(retryRequest(s))
+          case Some(reg) =>
+            reg ! ProducerController.RegisterConsumer(context.self)
+            Behaviors.same
+        }
 
       case Confirmed(seqNr) =>
         context.log.warn("Unexpected confirmed [{}]", seqNr)
@@ -243,8 +276,17 @@ private class ConsumerController[A](
         context.log.info("Consumer [{}] terminated", c)
         Behaviors.stopped
 
-      case _: RegisterToProducerController[_] =>
-        Behaviors.unhandled // already registered
+      case reg: RegisterToProducerController[A] =>
+        if (reg.producerController != s.producer) {
+          context.log.info2(
+            "Register to new ProducerController [{}], previous was [{}]",
+            reg.producerController,
+            s.producer)
+          reg.producerController ! ProducerController.RegisterConsumer(context.self)
+          active(s.copy(registering = Some(reg.producerController)))
+        } else {
+          Behaviors.same
+        }
     }
   }
 
@@ -254,7 +296,17 @@ private class ConsumerController[A](
     (seqMsg.first && seqMsg.seqNr >= expectedSeqNr) ||
     (seqMsg.first && seqMsg.producer != s.producer)
   }
-// It has detected a missing seqNr and requested a Resend. Expecting a SequencedMessage from the
+
+  private def updatedRegistering(
+      s: State[A],
+      seqMsg: SequencedMessage[A]): Option[ActorRef[ProducerController.Command[A]]] = {
+    s.registering match {
+      case None          => None
+      case s @ Some(reg) => if (seqMsg.producer == reg) None else s
+    }
+  }
+
+  // It has detected a missing seqNr and requested a Resend. Expecting a SequencedMessage from the
   // ProducerController with the missing seqNr. Other SequencedMessage with different seqNr will be
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State[A]): Behavior[InternalCommand] = {
@@ -264,7 +316,19 @@ private class ConsumerController[A](
         val seqNr = seqMsg.seqNr
         checkProducerId(producerId, pid, seqNr)
 
-        if (isExpected(s, seqMsg)) {
+        if (s.registering.isDefined && !seqMsg.first) {
+          context.log.infoN(
+            "from producer [{}], discarding message because registering to new ProducerController, seqNr [{}]",
+            pid,
+            seqNr)
+          Behaviors.same
+        } else if (seqMsg.producer != s.producer && !seqMsg.first) {
+          context.log.infoN(
+            "from producer [{}], discarding message because unexpected producer ActorRef, seqNr [{}]",
+            pid,
+            seqNr)
+          Behaviors.same
+        } else if (isExpected(s, seqMsg)) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           context.log.infoN(
             "from producer [{}], received {} [{}]",
@@ -272,7 +336,9 @@ private class ConsumerController[A](
             if (seqMsg.first) "first" else "missing",
             seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
-          waitingForConfirmation(s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr), seqMsg)
+          waitingForConfirmation(
+            s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
+            seqMsg)
         } else {
           context.log.infoN("from producer [{}], ignoring [{}], waiting for [{}]", pid, seqNr, s.receivedSeqNr + 1)
           if (seqMsg.first)
@@ -281,10 +347,16 @@ private class ConsumerController[A](
         }
 
       case Retry =>
-        // in case the Resend message was lost
-        context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
-        s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
-        Behaviors.same
+        s.registering match {
+          case None =>
+            // in case the Resend message was lost
+            context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
+            s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
+            Behaviors.same
+          case Some(reg) =>
+            reg ! ProducerController.RegisterConsumer(context.self)
+            Behaviors.same
+        }
 
       case Confirmed(seqNr) =>
         context.log.warn("Unexpected confirmed [{}]", seqNr)
@@ -300,8 +372,17 @@ private class ConsumerController[A](
         context.log.info("Consumer [{}] terminated", c)
         Behaviors.stopped
 
-      case _: RegisterToProducerController[_] =>
-        Behaviors.unhandled // already registered
+      case reg: RegisterToProducerController[A] =>
+        if (reg.producerController != s.producer) {
+          context.log.info2(
+            "Register to new ProducerController [{}], previous was [{}]",
+            reg.producerController,
+            s.producer)
+          reg.producerController ! ProducerController.RegisterConsumer(context.self)
+          resending(s.copy(registering = Some(reg.producerController)))
+        } else {
+          Behaviors.same
+        }
     }
   }
 
@@ -361,7 +442,12 @@ private class ConsumerController[A](
         Behaviors.same
 
       case Retry =>
-        waitingForConfirmation(retryRequest(s), seqMsg)
+        s.registering match {
+          case None => waitingForConfirmation(retryRequest(s), seqMsg)
+          case Some(reg) =>
+            reg ! ProducerController.RegisterConsumer(context.self)
+            Behaviors.same
+        }
 
       case start: Start[A] =>
         // if consumer is restarted it may send Start again
@@ -374,8 +460,18 @@ private class ConsumerController[A](
         context.log.info("Consumer [{}] terminated", c)
         Behaviors.stopped
 
-      case _: RegisterToProducerController[_] =>
-        Behaviors.unhandled // already registered
+      case reg: RegisterToProducerController[A] =>
+        if (reg.producerController != s.producer) {
+          context.log.info2(
+            "Register to new ProducerController [{}], previous was [{}]",
+            reg.producerController,
+            s.producer)
+          reg.producerController ! ProducerController.RegisterConsumer(context.self)
+          resending(s.copy(registering = Some(reg.producerController)))
+          waitingForConfirmation(s.copy(registering = Some(reg.producerController)), seqMsg)
+        } else {
+          Behaviors.same
+        }
     }
   }
 
