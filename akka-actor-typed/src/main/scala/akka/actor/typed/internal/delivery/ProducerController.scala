@@ -140,6 +140,8 @@ object ProducerController {
       .narrow
   }
 
+  // FIXME javadsl create methods
+
   /**
    * For custom `send` function. For example used with Sharding where the message must be wrapped in
    * `ShardingEnvelope(SequencedMessage(msg))`.
@@ -203,7 +205,7 @@ object ProducerController {
       send: SequencedMessage[A] => Unit,
       producer: ActorRef[RequestNext[A]],
       loadedState: DurableProducerQueue.State[A]): State[A] = {
-    val unconfirmed = loadedState.unconfirmed.zipWithIndex.map {
+    val unconfirmed = loadedState.unconfirmed.toVector.zipWithIndex.map {
       case (u, i) => SequencedMessage[A](producerId, u.seqNr, u.msg, i == 0, u.ack)(self)
     }
     State(
@@ -270,6 +272,7 @@ object ProducerController {
             state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
             true
           } else {
+            ctx.log.info("Starting with [{}] unconfirmed.", state.unconfirmed.size)
             ctx.self ! ResendFirst
             false
           }
