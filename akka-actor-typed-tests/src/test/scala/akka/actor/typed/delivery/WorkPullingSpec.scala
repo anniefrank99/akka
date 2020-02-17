@@ -51,19 +51,17 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
 
       val consumerEndProbe1 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val workerController1 =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"workerController1-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](workerServiceKey), s"workerController1-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, 42, consumerEndProbe1.ref, workerController1),
         name = s"worker1-${idCount}")
-      system.receptionist ! Receptionist.Register(workerServiceKey, workerController1)
 
       val consumerEndProbe2 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val workerController2 =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"workerController2-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](workerServiceKey), s"workerController2-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, 42, consumerEndProbe2.ref, workerController2),
         name = s"worker2-${idCount}")
-      system.receptionist ! Receptionist.Register(workerServiceKey, workerController2)
 
       consumerEndProbe1.receiveMessage(10.seconds)
       consumerEndProbe2.receiveMessage()

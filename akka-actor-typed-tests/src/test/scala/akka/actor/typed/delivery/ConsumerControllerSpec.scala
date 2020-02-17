@@ -23,7 +23,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "resend RegisterConsumer" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
       consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe.ref)
@@ -36,7 +36,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "resend initial Request" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -60,7 +60,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val windowSize = 20
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -95,7 +95,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "detect lost message" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -133,7 +133,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "resend Request" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -165,7 +165,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "stash while waiting for consumer confirmation" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -218,7 +218,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "optionally ack messages" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -256,7 +256,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "allow restart of consumer" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -294,7 +294,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "stop ConsumerController when consumer is stopped" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
 
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
@@ -313,7 +313,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "stop ConsumerController when consumer is stopped before first message" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
 
       val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
@@ -326,7 +326,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "handle first message when waiting for lost (resending)" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 
@@ -371,7 +371,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "accept lost message" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = false), s"consumerController-${idCount}")
+        spawn(ConsumerController.onlyFlowControl[TestConsumer.Job](), s"consumerController-${idCount}")
           .unsafeUpcast[ConsumerController.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
 

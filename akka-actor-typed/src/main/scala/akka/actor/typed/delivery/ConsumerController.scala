@@ -8,6 +8,8 @@ import scala.concurrent.duration._
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
+import akka.actor.typed.receptionist.Receptionist
+import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
@@ -84,13 +86,39 @@ object ConsumerController {
 
   private val RequestWindow = 20 // FIXME should be a param, ofc
 
-  // FIXME convenience for resendLost = true, since that should be the normal default
+  def apply[A](): Behavior[Command[A]] =
+    apply(resendLost = true, serviceKey = None)
 
-  def apply[A](resendLost: Boolean): Behavior[Command[A]] = {
+  /**
+   * Lost messages will not be resent, but flow control is used.
+   * This can be more efficient since messages doesn't have to be
+   * kept in memory in the `ProducerController` until they have been
+   * confirmed.
+   */
+  def onlyFlowControl[A](): Behavior[Command[A]] =
+    apply(resendLost = false, serviceKey = None)
+
+  /**
+   * To be used with [[WorkPullingProducerController]]. It will register itself to the
+   * [[Receptionist]] with the given `serviceKey`, and the `WorkPullingProducerController`
+   * subscribes to the same key to find active workers.
+   */
+  def apply[A](serviceKey: ServiceKey[Command[A]]): Behavior[Command[A]] =
+    apply(resendLost = true, Some(serviceKey))
+
+  /**
+   * INTERNAL API
+   */
+  @InternalApi private[akka] def apply[A](
+      resendLost: Boolean,
+      serviceKey: Option[ServiceKey[Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .withStash[InternalCommand](RequestWindow) { stashBuffer =>
         Behaviors.setup { ctx =>
           ctx.setLoggerName(classOf[ConsumerController[_]])
+          serviceKey.foreach { key =>
+            ctx.system.receptionist ! Receptionist.Register(key, ctx.self)
+          }
           Behaviors.withTimers { timers =>
             def becomeActive(
                 producerId: String,

@@ -84,7 +84,7 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
     val consumerController =
       spawn(
         Behaviors.intercept(() => RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](rnd, consumerDrop))(
-          ConsumerController[TestConsumer.Job](resendLost)),
+          ConsumerController[TestConsumer.Job](resendLost, serviceKey = None)),
         s"consumerController-${idCount}")
     spawn(
       TestConsumer(consumerDelay, numberOfMessages, consumerEndProbe.ref, consumerController),

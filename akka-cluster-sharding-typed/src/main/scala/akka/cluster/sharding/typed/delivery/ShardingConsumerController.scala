@@ -12,15 +12,14 @@ import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 
 object ShardingConsumerController {
-  def apply[A, B](
-      consumerBehavior: ActorRef[ConsumerController.Start[A]] => Behavior[B],
-      resendLost: Boolean): Behavior[ConsumerController.SequencedMessage[A]] = {
+  def apply[A, B](consumerBehavior: ActorRef[ConsumerController.Start[A]] => Behavior[B])
+      : Behavior[ConsumerController.SequencedMessage[A]] = {
     Behaviors
       .setup[ConsumerController.Command[A]] { context =>
         context.setLoggerName(classOf[ShardingConsumerController[_]])
         val consumer = context.spawn(consumerBehavior(context.self), name = "consumer")
         context.watch(consumer)
-        waitForStart(context, resendLost)
+        waitForStart(context)
       }
       .narrow
   }
@@ -28,14 +27,12 @@ object ShardingConsumerController {
   // FIXME javadsl create
 
   private def waitForStart[A](
-      context: ActorContext[ConsumerController.Command[A]],
-      resendLost: Boolean): Behavior[ConsumerController.Command[A]] = {
+      context: ActorContext[ConsumerController.Command[A]]): Behavior[ConsumerController.Command[A]] = {
     Behaviors.withStash(10000) { stashBuffer => // FIXME buffer size
       Behaviors
         .receiveMessage[ConsumerController.Command[A]] {
           case start: ConsumerController.Start[A] =>
-            stashBuffer.unstashAll(
-              new ShardingConsumerController[A](context, resendLost, start.deliverTo).active(Map.empty))
+            stashBuffer.unstashAll(new ShardingConsumerController[A](context, start.deliverTo).active(Map.empty))
           case other =>
             stashBuffer.stash(other)
             Behaviors.same
@@ -51,7 +48,6 @@ object ShardingConsumerController {
 
 class ShardingConsumerController[A](
     context: ActorContext[ConsumerController.Command[A]],
-    resendLost: Boolean,
     deliverTo: ActorRef[ConsumerController.Delivery[A]]) {
 
   def active(
@@ -65,7 +61,7 @@ class ShardingConsumerController[A](
               c ! msg
               Behaviors.same
             case None =>
-              val c = context.spawn(ConsumerController[A](resendLost), s"consumerController-${msg.producerId}")
+              val c = context.spawn(ConsumerController[A](), s"consumerController-${msg.producerId}")
               // FIXME watch msg.producerController to cleanup terminated producers
               c ! ConsumerController.Start(deliverTo)
               c ! msg

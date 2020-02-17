@@ -107,12 +107,9 @@ class ReliableDeliveryShardingSpec
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        ClusterSharding(system).init(
-          Entity(typeKey)(
-            _ =>
-              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
-                c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
-                resendLost = true)))
+        ClusterSharding(system).init(Entity(typeKey)(_ =>
+          ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
+            TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c))))
 
       val shardingController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
@@ -130,12 +127,9 @@ class ReliableDeliveryShardingSpec
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        ClusterSharding(system).init(
-          Entity(typeKey)(
-            _ =>
-              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
-                c => TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c),
-                resendLost = true)))
+        ClusterSharding(system).init(Entity(typeKey)(_ =>
+          ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
+            TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c))))
 
       val shardingController1 =
         spawn(
@@ -178,12 +172,9 @@ class ReliableDeliveryShardingSpec
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        ClusterSharding(system).init(
-          Entity(typeKey)(
-            _ =>
-              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
-                c => TestConsumer(defaultConsumerDelay, 3, consumerEndProbe.ref, c),
-                resendLost = true)))
+        ClusterSharding(system).init(Entity(typeKey)(_ =>
+          ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
+            TestConsumer(defaultConsumerDelay, 3, consumerEndProbe.ref, c))))
 
       val shardingController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")

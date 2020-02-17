@@ -27,7 +27,7 @@ object ReliableDeliveryWithEventSourcedProducerQueueSpec {
 }
 
 class ReliableDeliveryWithEventSourcedProducerQueueSpec
-    extends ScalaTestWithActorTestKit(ReliableDeliveryWithEventSourcedProducerQueueSpec.conf)
+    extends ScalaTestWithActorTestKit(WorkPullingWithEventSourcedProducerQueueSpec.conf)
     with AnyWordSpecLike
     with LogCapturing {
 
@@ -43,7 +43,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
           Some(EventSourcedProducerQueue[String](PersistenceId.ofUniqueId(producerId)))))
       producerController ! ProducerController.Start(producerProbe.ref)
 
-      val consumerController = spawn(ConsumerController[String](resendLost = true))
+      val consumerController = spawn(ConsumerController[String]())
       val consumerProbe = createTestProbe[ConsumerController.Delivery[String]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
       consumerController ! ConsumerController.RegisterToProducerController(producerController)
@@ -66,7 +66,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
           Some(EventSourcedProducerQueue[String](PersistenceId.ofUniqueId(producerId)))))
       producerController2 ! ProducerController.Start(producerProbe.ref)
 
-      val consumerController2 = spawn(ConsumerController[String](resendLost = true))
+      val consumerController2 = spawn(ConsumerController[String]())
       consumerController2 ! ConsumerController.Start(consumerProbe.ref)
       consumerController2 ! ConsumerController.RegisterToProducerController(producerController2)
 
@@ -104,7 +104,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
           Some(EventSourcedProducerQueue[String](PersistenceId.ofUniqueId(producerId)))))
       producerController ! ProducerController.Start(producerProbe.ref)
 
-      val consumerController = spawn(ConsumerController[String](resendLost = true))
+      val consumerController = spawn(ConsumerController[String]())
       val consumerProbe = createTestProbe[ConsumerController.Delivery[String]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
       consumerController ! ConsumerController.RegisterToProducerController(producerController)

@@ -26,7 +26,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
@@ -48,7 +48,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")
@@ -77,7 +77,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
       spawn(TestConsumer(consumerDelay, 42, consumerEndProbe.ref, consumerController), name = s"destination-${idCount}")
 
       val producerController =
@@ -109,7 +109,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController1-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController1-${idCount}")
       spawn(TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, consumerController), s"consumer1-${idCount}")
 
       val producerController =
@@ -122,7 +122,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
 
       val consumerEndProbe2 = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController2 =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController2-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController2-${idCount}")
       spawn(TestConsumer(defaultConsumerDelay, 42, consumerEndProbe2.ref, consumerController2), s"consumer2-${idCount}")
       consumerController2 ! ConsumerController.RegisterToProducerController(producerController)
 
@@ -137,7 +137,7 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
       nextId()
       val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
       val consumerController =
-        spawn(ConsumerController[TestConsumer.Job](resendLost = true), s"consumerController-${idCount}")
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
       spawn(
         TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, consumerController),
         name = s"destination-${idCount}")

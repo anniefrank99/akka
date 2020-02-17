@@ -84,12 +84,9 @@ class DurableShardingSpec
       val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
       val consumerProbe = createTestProbe[TestConsumer.JobDelivery]()
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        ClusterSharding(system).init(
-          Entity(typeKey)(
-            _ =>
-              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
-                c => consumerBehavior(c, consumerProbe.ref),
-                resendLost = true)))
+        ClusterSharding(system).init(Entity(typeKey)(_ =>
+          ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
+            consumerBehavior(c, consumerProbe.ref))))
 
       val shardingProducerController =
         spawn(
@@ -185,12 +182,9 @@ class DurableShardingSpec
       val consumerProbe = createTestProbe[TestConsumer.JobDelivery]()
 
       val sharding: ActorRef[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]] =
-        ClusterSharding(system).init(
-          Entity(typeKey)(
-            _ =>
-              ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](
-                c => consumerBehavior(c, consumerProbe.ref),
-                resendLost = true)))
+        ClusterSharding(system).init(Entity(typeKey)(_ =>
+          ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
+            consumerBehavior(c, consumerProbe.ref))))
 
       val shardingProducerController =
         spawn(
