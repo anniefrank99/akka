@@ -346,6 +346,69 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       createTestProbe().expectTerminated(consumerController)
     }
 
+    "deduplicate resend of first message" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      // that Request will typically cancel the resending of first, but in unlucky timing it may happen
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      // deduplicated, not delivered again
+      consumerProbe.expectNoMessage()
+
+      // but if the ProducerController is changed it will not be deduplicated
+      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe2.ref)
+      producerControllerProbe2.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+      producerControllerProbe2.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+
+      testKit.stop(consumerController)
+    }
+
+    "request window after first" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerController.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      producerControllerProbe.expectMessage(
+        ProducerController.Internal.Request(0, ConsumerController.RequestWindow, true, false))
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+
+      // and if the ProducerController is changed
+      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref)
+        .copy(first = true)(producerControllerProbe2.ref)
+      producerControllerProbe2.expectMessage(
+        ProducerController.Internal.Request(0, 23 + ConsumerController.RequestWindow - 1, true, false))
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(23)
+
+      val producerControllerProbe3 = createTestProbe[ProducerController.InternalCommand]()
+      consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref)
+        .copy(first = true)(producerControllerProbe3.ref)
+      producerControllerProbe3.expectMessage(
+        ProducerController.Internal.Request(0, 7 + ConsumerController.RequestWindow - 1, true, false))
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(7)
+
+      testKit.stop(consumerController)
+    }
+
     "handle first message when waiting for lost (resending)" in {
       nextId()
       val consumerController =

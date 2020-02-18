@@ -84,7 +84,7 @@ object ConsumerController {
       requestedSeqNr: SeqNr,
       registering: Option[ActorRef[ProducerController.Command[A]]])
 
-  private val RequestWindow = 20 // FIXME should be a param, ofc
+  val RequestWindow = 20 // FIXME should be a param, ofc
 
   def apply[A](): Behavior[Command[A]] =
     apply(resendLost = true, serviceKey = None)
@@ -237,7 +237,15 @@ private class ConsumerController[A](
         val seqNr = seqMsg.seqNr
         val expectedSeqNr = s.receivedSeqNr + 1
 
-        // FIXME, first is resent. How to avoid delivering duplicate first? Need epoch id?
+        val (newConfirmedSeqNr, newRequestedSeqNr) =
+          if (seqMsg.first && seqMsg.producer != s.producer) {
+            val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
+            context.log.info("Request first [{}]", newRequestedSeqNr)
+            seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
+            (0L, newRequestedSeqNr)
+          } else {
+            (s.confirmedSeqNr, s.requestedSeqNr)
+          }
 
         if (s.registering.isDefined && !seqMsg.first) {
           context.log.infoN(
@@ -259,7 +267,8 @@ private class ConsumerController[A](
             s.copy(
               producer = seqMsg.producer,
               receivedSeqNr = seqNr,
-              requestedSeqNr = s.requestedSeqNr,
+              confirmedSeqNr = newConfirmedSeqNr,
+              requestedSeqNr = newRequestedSeqNr,
               registering = updatedRegistering(s, seqMsg)),
             seqMsg)
         } else if (seqNr > expectedSeqNr) {
@@ -272,7 +281,12 @@ private class ConsumerController[A](
             context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
             s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
             waitingForConfirmation(
-              s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
+              s.copy(
+                producer = seqMsg.producer,
+                receivedSeqNr = seqNr,
+                confirmedSeqNr = newConfirmedSeqNr,
+                requestedSeqNr = newRequestedSeqNr,
+                registering = updatedRegistering(s, seqMsg)),
               seqMsg)
           }
         } else { // seqNr < expectedSeqNr
@@ -366,8 +380,24 @@ private class ConsumerController[A](
             seqNr)
           context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
+
+          val (newConfirmedSeqNr, newRequestedSeqNr) =
+            if (seqMsg.first && seqMsg.producer != s.producer) {
+              val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
+              context.log.info("Request first [{}]", newRequestedSeqNr)
+              seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
+              (0L, newRequestedSeqNr)
+            } else {
+              (s.confirmedSeqNr, s.requestedSeqNr)
+            }
+
           waitingForConfirmation(
-            s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
+            s.copy(
+              producer = seqMsg.producer,
+              receivedSeqNr = seqNr,
+              confirmedSeqNr = newConfirmedSeqNr,
+              requestedSeqNr = newRequestedSeqNr,
+              registering = updatedRegistering(s, seqMsg)),
             seqMsg)
         } else {
           context.log.infoN("from producer [{}], ignoring [{}], waiting for [{}]", pid, seqNr, s.receivedSeqNr + 1)
