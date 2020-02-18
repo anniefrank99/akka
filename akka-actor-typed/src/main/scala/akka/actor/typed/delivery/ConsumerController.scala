@@ -140,7 +140,7 @@ object ConsumerController {
                 resendLost,
                 viaTimeout = false)
 
-              val next = new ConsumerController[A](ctx, timers, producerId, stashBuffer, resendLost).active(
+              val next = new ConsumerController[A](ctx, timers, stashBuffer, resendLost).active(
                 State(
                   producer,
                   start.deliverTo,
@@ -218,7 +218,6 @@ object ConsumerController {
 private class ConsumerController[A](
     context: ActorContext[ConsumerController.InternalCommand],
     timers: TimerScheduler[ConsumerController.InternalCommand],
-    producerId: String,
     stashBuffer: StashBuffer[ConsumerController.InternalCommand],
     resendLost: Boolean) {
 
@@ -236,8 +235,9 @@ private class ConsumerController[A](
       case seqMsg: SequencedMessage[A] =>
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
-        checkProducerId(producerId, pid, seqNr)
         val expectedSeqNr = s.receivedSeqNr + 1
+
+        // FIXME, first is resent. How to avoid delivering duplicate first? Need epoch id?
 
         if (s.registering.isDefined && !seqMsg.first) {
           context.log.infoN(
@@ -253,6 +253,7 @@ private class ConsumerController[A](
           Behaviors.same
         } else if (isExpected(s, seqMsg)) {
           logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
+          context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
           waitingForConfirmation(
             s.copy(
@@ -268,6 +269,7 @@ private class ConsumerController[A](
             seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
             resending(s.copy(producer = seqMsg.producer, registering = updatedRegistering(s, seqMsg)))
           } else {
+            context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
             s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
             waitingForConfirmation(
               s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
@@ -342,7 +344,6 @@ private class ConsumerController[A](
       case seqMsg: SequencedMessage[A] =>
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
-        checkProducerId(producerId, pid, seqNr)
 
         if (s.registering.isDefined && !seqMsg.first) {
           context.log.infoN(
@@ -363,6 +364,7 @@ private class ConsumerController[A](
             pid,
             if (seqMsg.first) "first" else "missing",
             seqNr)
+          context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
           s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
           waitingForConfirmation(
             s.copy(producer = seqMsg.producer, receivedSeqNr = seqNr, registering = updatedRegistering(s, seqMsg)),
@@ -481,6 +483,7 @@ private class ConsumerController[A](
         // if consumer is restarted it may send Start again
         context.unwatch(s.consumer)
         context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
+        context.log.info("from producer [{}], deliver [{}] to consumer, after Start", seqMsg.producerId, seqMsg.seqNr)
         start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
         waitingForConfirmation(s.copy(consumer = start.deliverTo), seqMsg)
 
@@ -514,13 +517,6 @@ private class ConsumerController[A](
     // FIXME may watch the producer to avoid sending retry Request to dead producer
     s.producer ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
     s.copy(requestedSeqNr = newRequestedSeqNr)
-  }
-
-  private def checkProducerId(producerId: String, incomingProducerId: String, seqNr: SeqNr): Unit = {
-    if (incomingProducerId != producerId)
-      throw new IllegalArgumentException(
-        s"Unexpected producerId, expected [$producerId], received [$incomingProducerId], " +
-        s"seqNr [$seqNr].")
   }
 
   private def logIfChangingProducer(

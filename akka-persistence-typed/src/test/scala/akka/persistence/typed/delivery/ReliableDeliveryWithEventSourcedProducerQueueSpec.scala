@@ -55,6 +55,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
 
       consumerProbe.receiveMessage().msg should ===("a")
 
+      system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
       producerProbe.expectTerminated(producerController)
       testKit.stop(consumerController)
@@ -117,14 +118,12 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       val delivery1 = consumerProbe.receiveMessage()
       delivery1.msg should ===("a")
 
+      system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
 
       // TODO how should consumer notice that producerController has stopped?
       // Maybe it should just watch it, since it is anyway responsible for RegisterToProducerController
       consumerProbe.expectTerminated(producerController)
-
-      // FIXME write similar test for sharding, where RegisterToProducerController isn't used, but
-      // the ConsumerController just receives a new first SeqMsg from new ProducerController.
 
       val producerController2 = spawn(
         ProducerController[String](
@@ -162,7 +161,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       delivery5.msg should ===("e")
       delivery5.confirmTo ! ConsumerController.Confirmed(delivery5.seqNr)
 
-      testKit.stop(producerController)
+      testKit.stop(producerController2)
       testKit.stop(consumerController)
     }
 
