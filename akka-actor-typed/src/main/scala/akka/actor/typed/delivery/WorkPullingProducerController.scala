@@ -23,6 +23,7 @@ import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
 import akka.util.Timeout
 import DurableProducerQueue.ConfirmationQualifier
+import akka.actor.typed.delivery.DurableProducerQueue.SeqNr
 
 object WorkPullingProducerController {
 
@@ -333,29 +334,6 @@ class WorkPullingProducerController[A: ClassTag](
       }
     }
 
-    def onAck(outState: OutState[A], confirmedSeqNr: OutSeqNr): Vector[Unconfirmed[A]] = {
-      val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
-        case Unconfirmed(_, seqNr, _, _) => seqNr <= confirmedSeqNr
-      }
-
-      if (confirmed.nonEmpty) {
-        context.log.info("Confirmed seqNr [{}] from worker [{}]", confirmedSeqNr, outState.confirmationQualifier)
-        context.log.info(s"Confirmed [$confirmed], remaining unconfirmed [$newUnconfirmed]") // FIXME remove
-        confirmed.foreach {
-          case Unconfirmed(_, _, _, None) => // no reply
-          case Unconfirmed(_, _, _, Some(replyTo)) =>
-            replyTo ! Done
-        }
-
-        durableQueue.foreach { d =>
-          // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.confirmationQualifier)
-        }
-      }
-
-      newUnconfirmed
-    }
-
     def workersWithDemand: Vector[(OutKey, OutState[A])] =
       s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
 
@@ -418,6 +396,136 @@ class WorkPullingProducerController[A: ClassTag](
       }
     }
 
+    def receiveStoreMessageSentCompleted(seqNr: SeqNr, m: A) = {
+      s.replyAfterStore.get(seqNr).foreach { replyTo =>
+        context.log.info("Confirmation reply to [{}] after storage", seqNr)
+        replyTo ! Done
+      }
+
+      s.handOver.get(seqNr).foreach {
+        case HandOver(oldConfirmationQualifier, oldSeqNr) =>
+          durableQueue.foreach { d =>
+            d ! StoreMessageConfirmed(oldSeqNr, oldConfirmationQualifier)
+          }
+      }
+
+      val newState = onMessage(m, wasStashed = false, replyTo = None, seqNr)
+      active(newState.copy(replyAfterStore = newState.replyAfterStore - seqNr, handOver = newState.handOver - seqNr))
+    }
+
+    def receiveAck(ack: Ack): Behavior[InternalCommand] = {
+      s.out.get(ack.outKey) match {
+        case Some(outState) =>
+          val newUnconfirmed = onAck(outState, ack.confirmedSeqNr)
+          active(s.copy(out = s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed))))
+        case None =>
+          // obsolete Next, ConsumerController already deregistered
+          Behaviors.unhandled
+      }
+    }
+
+    def onAck(outState: OutState[A], confirmedSeqNr: OutSeqNr): Vector[Unconfirmed[A]] = {
+      val (confirmed, newUnconfirmed) = outState.unconfirmed.partition {
+        case Unconfirmed(_, seqNr, _, _) => seqNr <= confirmedSeqNr
+      }
+
+      if (confirmed.nonEmpty) {
+        context.log.info("Confirmed seqNr [{}] from worker [{}]", confirmedSeqNr, outState.confirmationQualifier)
+        context.log.info(s"Confirmed [$confirmed], remaining unconfirmed [$newUnconfirmed]") // FIXME remove
+        confirmed.foreach {
+          case Unconfirmed(_, _, _, None) => // no reply
+          case Unconfirmed(_, _, _, Some(replyTo)) =>
+            replyTo ! Done
+        }
+
+        durableQueue.foreach { d =>
+          // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.confirmationQualifier)
+        }
+      }
+
+      newUnconfirmed
+    }
+
+    def receiveWorkerRequestNext(w: WorkerRequestNext[A]): Behavior[InternalCommand] = {
+      val next = w.next
+      val outKey = next.producerId
+      s.out.get(outKey) match {
+        case Some(outState) =>
+          val confirmedSeqNr = w.next.confirmedSeqNr
+          context.log.info2("WorkerRequestNext from [{}], confirmedSeqNr [{}]", w.next.producerId, confirmedSeqNr)
+
+          val newUnconfirmed = onAck(outState, confirmedSeqNr)
+
+          val newOut =
+            s.out.updated(
+              outKey,
+              outState
+                .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, askNextTo = Some(next.askNextTo)))
+
+          if (stashBuffer.nonEmpty) {
+            context.log.info2("Unstash [{}] after WorkerRequestNext from [{}]", stashBuffer.size, w.next.producerId)
+            stashBuffer.unstashAll(active(s.copy(out = newOut)))
+          } else if (s.hasRequested) {
+            active(s.copy(out = newOut))
+          } else {
+            context.log.info("RequestNext after WorkerRequestNext from [{}]", w.next.producerId)
+            producer ! requestNext
+            active(s.copy(out = newOut, hasRequested = true))
+          }
+
+        case None =>
+          // obsolete Next, ConsumerController already deregistered
+          Behaviors.unhandled
+      }
+    }
+
+    def receiveCurrentWorkers(curr: CurrentWorkers[A]): Behavior[InternalCommand] = {
+      // TODO we could also track unreachable workers and avoid them when selecting worker
+      val addedWorkers = curr.workers.diff(s.workers)
+      val removedWorkers = s.workers.diff(curr.workers)
+
+      val newState = addedWorkers.foldLeft(s) { (acc, c) =>
+        val uuid = UUID.randomUUID().toString
+        val outKey = s"$producerId-$uuid"
+        // FIXME adjust all logging, most should probably be debug
+        context.log.info2("Registered worker [{}], with producerId [{}]", c, outKey)
+        val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None), uuid)
+        p ! ProducerController.Start(workerRequestNextAdapter)
+        p ! ProducerController.RegisterConsumer(c)
+        acc.copy(out = acc.out.updated(outKey, OutState(p, c, 0L, Vector.empty, None)))
+      }
+
+      val newState2 = removedWorkers.foldLeft(newState) { (acc, c) =>
+        acc.out.find { case (_, outState) => outState.consumerController == c } match {
+          case Some((key, outState)) =>
+            context.log.info2("Deregistered non-existing worker [{}], with producerId [{}]", c, key)
+            context.stop(outState.producerController)
+            // resend the unconfirmed, sending to self since order of messages for WorkPulling doesn't matter anyway
+            if (outState.unconfirmed.nonEmpty)
+              context.log.infoN(
+                "Resending unconfirmed from deregistered worker with producerId [{}], from seqNr [{}] to [{}]",
+                key,
+                outState.unconfirmed.head.outSeqNr,
+                outState.unconfirmed.last.outSeqNr)
+            outState.unconfirmed.foreach {
+              case Unconfirmed(totalSeqNr, _, msg, replyTo) =>
+                if (durableQueue.isEmpty)
+                  context.self ! Msg(msg, wasStashed = true, replyTo)
+                else
+                  context.self ! ResendDurableMsg(msg, outState.confirmationQualifier, totalSeqNr)
+            }
+            acc.copy(out = acc.out - key)
+
+          case None =>
+            context.log.info("Deregistered non-existing worker [{}]", c)
+            acc
+        }
+      }
+
+      active(newState2.copy(workers = curr.workers))
+    }
+
     Behaviors.receiveMessage {
       case Msg(msg: A, wasStashed, replyTo) =>
         if (durableQueue.isEmpty || wasStashed)
@@ -435,114 +543,19 @@ class WorkPullingProducerController[A: ClassTag](
         onResendDurableMsg(m)
 
       case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _, _)) =>
-        s.replyAfterStore.get(seqNr).foreach { replyTo =>
-          context.log.info("Confirmation reply to [{}] after storage", seqNr)
-          replyTo ! Done
-        }
-
-        s.handOver.get(seqNr).foreach {
-          case HandOver(oldConfirmationQualifier, oldSeqNr) =>
-            durableQueue.foreach { d =>
-              d ! StoreMessageConfirmed(oldSeqNr, oldConfirmationQualifier)
-            }
-        }
-
-        val newState = onMessage(m, wasStashed = false, replyTo = None, seqNr)
-        active(newState.copy(replyAfterStore = newState.replyAfterStore - seqNr, handOver = newState.handOver - seqNr))
+        receiveStoreMessageSentCompleted(seqNr, m)
 
       case f: StoreMessageSentFailed[A] =>
-        // FIXME attempt counter, and give up
-        context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
-        // retry
-        storeMessageSent(f.messageSent, attempt = f.attempt + 1)
-        Behaviors.same
+        receiveStoreMessageSentFailed(f)
 
-      case Ack(outKey, confirmedSeqNr) =>
-        s.out.get(outKey) match {
-          case Some(outState) =>
-            val newUnconfirmed = onAck(outState, confirmedSeqNr)
-            active(s.copy(out = s.out.updated(outKey, outState.copy(unconfirmed = newUnconfirmed))))
-          case None =>
-            // obsolete Next, ConsumerController already deregistered
-            Behaviors.unhandled
-        }
-
-      case curr: CurrentWorkers[A] =>
-        // TODO we could also track unreachable workers and avoid them when selecting worker
-        val addedWorkers = curr.workers.diff(s.workers)
-        val removedWorkers = s.workers.diff(curr.workers)
-
-        val newState = addedWorkers.foldLeft(s) { (acc, c) =>
-          val uuid = UUID.randomUUID().toString
-          val outKey = s"$producerId-$uuid"
-          // FIXME adjust all logging, most should probably be debug
-          context.log.info2("Registered worker [{}], with producerId [{}]", c, outKey)
-          val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None), uuid)
-          p ! ProducerController.Start(workerRequestNextAdapter)
-          p ! ProducerController.RegisterConsumer(c)
-          acc.copy(out = acc.out.updated(outKey, OutState(p, c, 0L, Vector.empty, None)))
-        }
-
-        val newState2 = removedWorkers.foldLeft(newState) { (acc, c) =>
-          acc.out.find { case (_, outState) => outState.consumerController == c } match {
-            case Some((key, outState)) =>
-              context.log.info2("Deregistered non-existing worker [{}], with producerId [{}]", c, key)
-              context.stop(outState.producerController)
-              // resend the unconfirmed, sending to self since order of messages for WorkPulling doesn't matter anyway
-              if (outState.unconfirmed.nonEmpty)
-                context.log.infoN(
-                  "Resending unconfirmed from deregistered worker with producerId [{}], from seqNr [{}] to [{}]",
-                  key,
-                  outState.unconfirmed.head.outSeqNr,
-                  outState.unconfirmed.last.outSeqNr)
-              outState.unconfirmed.foreach {
-                case Unconfirmed(totalSeqNr, _, msg, replyTo) =>
-                  if (durableQueue.isEmpty)
-                    context.self ! Msg(msg, wasStashed = true, replyTo)
-                  else
-                    context.self ! ResendDurableMsg(msg, outState.confirmationQualifier, totalSeqNr)
-              }
-              acc.copy(out = acc.out - key)
-
-            case None =>
-              context.log.info("Deregistered non-existing worker [{}]", c)
-              acc
-          }
-        }
-
-        active(newState2.copy(workers = curr.workers))
+      case ack: Ack =>
+        receiveAck(ack)
 
       case w: WorkerRequestNext[A] =>
-        val next = w.next
-        val outKey = next.producerId
-        s.out.get(outKey) match {
-          case Some(outState) =>
-            val confirmedSeqNr = w.next.confirmedSeqNr
-            context.log.info2("WorkerRequestNext from [{}], confirmedSeqNr [{}]", w.next.producerId, confirmedSeqNr)
+        receiveWorkerRequestNext(w)
 
-            val newUnconfirmed = onAck(outState, confirmedSeqNr)
-
-            val newOut =
-              s.out.updated(
-                outKey,
-                outState
-                  .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, askNextTo = Some(next.askNextTo)))
-
-            if (stashBuffer.nonEmpty) {
-              context.log.info2("Unstash [{}] after WorkerRequestNext from [{}]", stashBuffer.size, w.next.producerId)
-              stashBuffer.unstashAll(active(s.copy(out = newOut)))
-            } else if (s.hasRequested) {
-              active(s.copy(out = newOut))
-            } else {
-              context.log.info("RequestNext after WorkerRequestNext from [{}]", w.next.producerId)
-              producer ! requestNext
-              active(s.copy(out = newOut, hasRequested = true))
-            }
-
-          case None =>
-            // obsolete Next, ConsumerController already deregistered
-            Behaviors.unhandled
-        }
+      case curr: CurrentWorkers[A] =>
+        receiveCurrentWorkers(curr)
 
       case GetWorkerStats(replyTo) =>
         replyTo ! WorkerStats(s.workers.size)
@@ -554,6 +567,14 @@ class WorkPullingProducerController[A: ClassTag](
       // FIXME case Start register of new producer, e.g. restart
 
     }
+  }
+
+  private def receiveStoreMessageSentFailed(f: StoreMessageSentFailed[A]): Behavior[InternalCommand] = {
+    // FIXME attempt counter, and give up
+    context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+    // retry
+    storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+    Behaviors.same
   }
 
   private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {

@@ -14,6 +14,8 @@ import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.DurableProducerQueue
+import akka.actor.typed.delivery.DurableProducerQueue.ConfirmationQualifier
+import akka.actor.typed.delivery.DurableProducerQueue.SeqNr
 import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
@@ -314,6 +316,77 @@ class ShardingProducerController[A: ClassTag](
       newUnconfirmed
     }
 
+    def receiveStoreMessageSentCompleted(
+        seqNr: SeqNr,
+        msg: A,
+        entityId: ConfirmationQualifier): Behavior[InternalCommand] = {
+      s.replyAfterStore.get(seqNr).foreach { replyTo =>
+        context.log.info("Confirmation reply to [{}] after storage", seqNr)
+        replyTo ! Done
+      }
+      val newReplyAfterStore = s.replyAfterStore - seqNr
+
+      onMessage(entityId, msg, replyTo = None, seqNr, newReplyAfterStore)
+    }
+
+    def receiveStoreMessageSentFailed(f: StoreMessageSentFailed[A]): Behavior[InternalCommand] = {
+      // FIXME attempt counter, and give up
+      context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+      // retry
+      storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+      Behaviors.same
+    }
+
+    def receiveAck(ack: Ack): Behavior[InternalCommand] = {
+      s.out.get(ack.outKey) match {
+        case Some(outState) =>
+          val newUnconfirmed = onAck(outState, ack.confirmedSeqNr)
+          active(s.copy(out = s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed))))
+        case None =>
+          // obsolete Next, ConsumerController already deregistered
+          Behaviors.unhandled
+      }
+    }
+
+    def receiveWrappedRequestNext(w: WrappedRequestNext[A]) = {
+      val next = w.next
+      val outKey = next.producerId
+      s.out.get(outKey) match {
+        case Some(out) =>
+          if (out.nextTo.nonEmpty)
+            throw new IllegalStateException(s"Received RequestNext but already has demand for [$outKey]")
+
+          val confirmedSeqNr = w.next.confirmedSeqNr
+          context.log.info("RequestNext from [{}], confirmed seqNr [{}]", out.entityId, confirmedSeqNr)
+          val newUnconfirmed = onAck(out, confirmedSeqNr)
+
+          if (out.buffered.nonEmpty) {
+            val buf = out.buffered.head
+            send(buf.msg, outKey, out.seqNr, next)
+            val newUnconfirmed2 = newUnconfirmed :+ Unconfirmed(buf.totalSeqNr, out.seqNr, buf.replyTo)
+            val newProducers = s.out.updated(
+              outKey,
+              out.copy(
+                seqNr = out.seqNr + 1,
+                nextTo = None,
+                unconfirmed = newUnconfirmed2,
+                buffered = out.buffered.tail))
+            active(s.copy(out = newProducers))
+          } else {
+            val newProducers =
+              s.out.updated(outKey, out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed))
+            val newState = s.copy(out = newProducers)
+            // send an updated RequestNext
+            producer ! createRequestNext(newState)
+            active(newState)
+          }
+
+        case None =>
+          // FIXME support termination and removal of ProducerController
+          throw new IllegalStateException(s"Unexpected RequestNext for unknown [$outKey]")
+      }
+    }
+
     Behaviors.receiveMessage {
 
       case msg: Msg[A] =>
@@ -338,73 +411,22 @@ class ShardingProducerController[A: ClassTag](
         }
 
       case StoreMessageSentCompleted(MessageSent(seqNr, msg: A, _, entityId)) =>
-        s.replyAfterStore.get(seqNr).foreach { replyTo =>
-          context.log.info("Confirmation reply to [{}] after storage", seqNr)
-          replyTo ! Done
-        }
-        val newReplyAfterStore = s.replyAfterStore - seqNr
-
-        onMessage(entityId, msg, replyTo = None, seqNr, newReplyAfterStore)
+        receiveStoreMessageSentCompleted(seqNr, msg, entityId)
 
       case f: StoreMessageSentFailed[A] =>
-        // FIXME attempt counter, and give up
-        context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
-        // retry
-        storeMessageSent(f.messageSent, attempt = f.attempt + 1)
-        Behaviors.same
+        receiveStoreMessageSentFailed(f)
 
-      case Ack(outKey, confirmedSeqNr) =>
-        s.out.get(outKey) match {
-          case Some(outState) =>
-            val newUnconfirmed = onAck(outState, confirmedSeqNr)
-            active(s.copy(out = s.out.updated(outKey, outState.copy(unconfirmed = newUnconfirmed))))
-          case None =>
-            // obsolete Next, ConsumerController already deregistered
-            Behaviors.unhandled
-        }
+      case ack: Ack =>
+        receiveAck(ack)
 
       case w: WrappedRequestNext[A] =>
-        val next = w.next
-        val outKey = next.producerId
-        s.out.get(outKey) match {
-          case Some(out) =>
-            if (out.nextTo.nonEmpty)
-              throw new IllegalStateException(s"Received RequestNext but already has demand for [$outKey]")
+        receiveWrappedRequestNext(w)
 
-            val confirmedSeqNr = w.next.confirmedSeqNr
-            context.log.info("RequestNext from [{}], confirmed seqNr [{}]", out.entityId, confirmedSeqNr)
-            val newUnconfirmed = onAck(out, confirmedSeqNr)
-
-            if (out.buffered.nonEmpty) {
-              val buf = out.buffered.head
-              send(buf.msg, outKey, out.seqNr, next)
-              val newUnconfirmed2 = newUnconfirmed :+ Unconfirmed(buf.totalSeqNr, out.seqNr, buf.replyTo)
-              val newProducers = s.out.updated(
-                outKey,
-                out.copy(
-                  seqNr = out.seqNr + 1,
-                  nextTo = None,
-                  unconfirmed = newUnconfirmed2,
-                  buffered = out.buffered.tail))
-              active(s.copy(out = newProducers))
-            } else {
-              val newProducers =
-                s.out.updated(outKey, out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed))
-              val newState = s.copy(out = newProducers)
-              // send an updated RequestNext
-              producer ! createRequestNext(newState)
-              active(newState)
-            }
-
-          case None =>
-            // FIXME support termination and removal of ProducerController
-            throw new IllegalStateException(s"Unexpected RequestNext for unknown [$outKey]")
-        }
       // FIXME case Start register of new produce, e.g. restart
     }
   }
 
-  private def createRequestNext(s: State[A]) = {
+  private def createRequestNext(s: State[A]): RequestNext[A] = {
     val entitiesWithDemand = s.out.valuesIterator.collect { case out if out.nextTo.nonEmpty => out.entityId }.toSet
     val bufferedForEntitesWithoutDemand = s.out.valuesIterator.collect {
       case out if out.nextTo.isEmpty => out.entityId -> out.buffered.size
