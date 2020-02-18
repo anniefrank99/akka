@@ -82,7 +82,21 @@ object ConsumerController {
       receivedSeqNr: SeqNr,
       confirmedSeqNr: SeqNr,
       requestedSeqNr: SeqNr,
-      registering: Option[ActorRef[ProducerController.Command[A]]])
+      registering: Option[ActorRef[ProducerController.Command[A]]]) {
+
+    def isNextExpected(seqMsg: SequencedMessage[A]): Boolean =
+      seqMsg.seqNr == receivedSeqNr + 1
+
+    def isProducerChanged(seqMsg: SequencedMessage[A]): Boolean =
+      seqMsg.producer != producer || receivedSeqNr == 0
+
+    def updatedRegistering(seqMsg: SequencedMessage[A]): Option[ActorRef[ProducerController.Command[A]]] = {
+      registering match {
+        case None          => None
+        case s @ Some(reg) => if (seqMsg.producer == reg) None else s
+      }
+    }
+  }
 
   val RequestWindow = 20 // FIXME should be a param, ofc
 
@@ -114,91 +128,40 @@ object ConsumerController {
       serviceKey: Option[ServiceKey[Command[A]]]): Behavior[Command[A]] = {
     Behaviors
       .withStash[InternalCommand](RequestWindow) { stashBuffer =>
-        Behaviors.setup { ctx =>
-          ctx.setLoggerName(classOf[ConsumerController[_]])
+        Behaviors.setup { context =>
+          context.setLoggerName(classOf[ConsumerController[_]])
           serviceKey.foreach { key =>
-            ctx.system.receptionist ! Receptionist.Register(key, ctx.self)
+            context.system.receptionist ! Receptionist.Register(key, context.self)
           }
           Behaviors.withTimers { timers =>
-            def becomeActive(
-                producerId: String,
-                producer: ActorRef[ProducerController.InternalCommand],
-                start: Start[A],
-                firstSeqNr: SeqNr): Behavior[InternalCommand] = {
-              val requestedSeqNr = firstSeqNr - 1 + RequestWindow
-
-              // FIXME adjust all logging, most should probably be debug
-              ctx.log.infoN(
-                "Become active for producer [{}] / [{}], requestedSeqNr [{}]",
-                producerId,
-                producer,
-                requestedSeqNr)
-
-              producer ! ProducerController.Internal.Request(
-                confirmedSeqNr = 0,
-                requestedSeqNr,
-                resendLost,
-                viaTimeout = false)
-
-              val next = new ConsumerController[A](ctx, timers, stashBuffer, resendLost).active(
-                State(
-                  producer,
-                  start.deliverTo,
-                  receivedSeqNr = 0,
-                  confirmedSeqNr = 0,
-                  requestedSeqNr,
-                  registering = None))
-              if (stashBuffer.nonEmpty)
-                ctx.log.info("Unstash [{}]", stashBuffer.size)
-              stashBuffer.unstashAll(next)
-            }
-
-            // wait for both the `Start` message from the consumer and the first `SequencedMessage` from the producer
-            def idle(
-                register: Option[ActorRef[ProducerController.Command[A]]],
-                producer: Option[(String, ActorRef[ProducerController.InternalCommand])],
-                start: Option[Start[A]],
-                firstSeqNr: SeqNr): Behavior[InternalCommand] = {
+            // wait for the `Start` message from the consumer, SequencedMessage will be stashed
+            def waitForStart(register: Option[ActorRef[ProducerController.Command[A]]]): Behavior[InternalCommand] = {
               Behaviors.receiveMessagePartial {
                 case reg: RegisterToProducerController[A] @unchecked =>
-                  reg.producerController ! ProducerController.RegisterConsumer(ctx.self)
-                  idle(Some(reg.producerController), producer = None, start, firstSeqNr)
+                  reg.producerController ! ProducerController.RegisterConsumer(context.self)
+                  waitForStart(Some(reg.producerController))
 
                 case s: Start[A] @unchecked =>
-                  start.foreach(previous => ctx.unwatch(previous.deliverTo))
-                  ctx.watchWith(s.deliverTo, ConsumerTerminated(s.deliverTo))
-                  producer match {
-                    case None           => idle(register, None, Some(s), firstSeqNr)
-                    case Some((pid, p)) => becomeActive(pid, p, s, firstSeqNr)
+                  context.watchWith(s.deliverTo, ConsumerTerminated(s.deliverTo))
 
-                  }
+                  val activeBehavior =
+                    new ConsumerController[A](context, timers, stashBuffer, resendLost).active(initialState(context, s))
+                  context.log.info("Received Start, unstash [{}]", stashBuffer.size)
+                  stashBuffer.unstashAll(activeBehavior)
 
                 case seqMsg: SequencedMessage[A] @unchecked =>
-                  if (seqMsg.first) {
-                    ctx.log.info("Received first SequencedMessage [{}]", seqMsg.seqNr)
-                    stashBuffer.stash(seqMsg)
-                    start match {
-                      case None    => idle(None, Some((seqMsg.producerId, seqMsg.producer)), start, seqMsg.seqNr)
-                      case Some(s) => becomeActive(seqMsg.producerId, seqMsg.producer, s, seqMsg.seqNr)
-                    }
-                  } else if (seqMsg.seqNr > firstSeqNr) {
-                    ctx.log.info("Stashing non-first SequencedMessage [{}]", seqMsg.seqNr)
-                    stashBuffer.stash(seqMsg)
-                    Behaviors.same
-                  } else {
-                    ctx.log.info("Dropping non-first SequencedMessage [{}]", seqMsg.seqNr)
-                    Behaviors.same
-                  }
+                  stashBuffer.stash(seqMsg)
+                  Behaviors.same
 
                 case Retry =>
                   register.foreach { reg =>
-                    ctx.log.info("retry RegisterConsumer to [{}]", reg)
-                    reg ! ProducerController.RegisterConsumer(ctx.self)
+                    context.log.info("retry RegisterConsumer to [{}]", reg)
+                    reg ! ProducerController.RegisterConsumer(context.self)
                   }
                   Behaviors.same
 
                 case ConsumerTerminated(c) =>
-                  ctx.log.info("Consumer [{}] terminated", c)
+                  context.log.info("Consumer [{}] terminated", c)
                   Behaviors.stopped
 
               }
@@ -206,13 +169,22 @@ object ConsumerController {
             }
 
             timers.startTimerWithFixedDelay(Retry, Retry, 1.second) // FIXME config interval
-            idle(None, None, None, 1L)
+            waitForStart(None)
           }
         }
       }
       .narrow // expose Command, but not InternalCommand
   }
 
+  private def initialState[A](context: ActorContext[InternalCommand], start: Start[A]): State[A] = {
+    State(
+      producer = context.system.deadLetters,
+      start.deliverTo,
+      receivedSeqNr = 0,
+      confirmedSeqNr = 0,
+      requestedSeqNr = 0,
+      registering = None)
+  }
 }
 
 private class ConsumerController[A](
@@ -237,116 +209,83 @@ private class ConsumerController[A](
         val seqNr = seqMsg.seqNr
         val expectedSeqNr = s.receivedSeqNr + 1
 
-        val (newConfirmedSeqNr, newRequestedSeqNr) =
-          if (seqMsg.first && seqMsg.producer != s.producer) {
-            val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
-            context.log.info("Request first [{}]", newRequestedSeqNr)
-            seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
-            (0L, newRequestedSeqNr)
-          } else {
-            (s.confirmedSeqNr, s.requestedSeqNr)
-          }
-
-        if (s.registering.isDefined && !seqMsg.first) {
+        if (s.isProducerChanged(seqMsg)) {
+          receiveChangedProducer(s, seqMsg)
+        } else if (s.registering.isDefined) {
           context.log.infoN(
             "from producer [{}], discarding message because registering to new ProducerController, seqNr [{}]",
             pid,
             seqNr)
           Behaviors.same
-        } else if (seqMsg.producer != s.producer && !seqMsg.first) {
-          context.log.infoN(
-            "from producer [{}], discarding message because unexpected producer ActorRef, seqNr [{}]",
-            pid,
-            seqNr)
-          Behaviors.same
-        } else if (isExpected(s, seqMsg)) {
-          logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
-          context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
-          s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
-          waitingForConfirmation(
-            s.copy(
-              producer = seqMsg.producer,
-              receivedSeqNr = seqNr,
-              confirmedSeqNr = newConfirmedSeqNr,
-              requestedSeqNr = newRequestedSeqNr,
-              registering = updatedRegistering(s, seqMsg)),
-            seqMsg)
+        } else if (s.isNextExpected(seqMsg)) {
+          deliver(s.copy(receivedSeqNr = seqNr, registering = s.updatedRegistering(seqMsg)), seqMsg)
         } else if (seqNr > expectedSeqNr) {
-          logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
           context.log.infoN("from producer [{}], missing [{}], received [{}]", pid, expectedSeqNr, seqNr)
           if (resendLost) {
             seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
-            resending(s.copy(producer = seqMsg.producer, registering = updatedRegistering(s, seqMsg)))
+            resending(s.copy(registering = s.updatedRegistering(seqMsg)))
           } else {
-            context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
+            context.log.infoN("from producer [{}], missing [{}], deliver [{}] to consumer", pid, expectedSeqNr, seqNr)
             s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
-            waitingForConfirmation(
-              s.copy(
-                producer = seqMsg.producer,
-                receivedSeqNr = seqNr,
-                confirmedSeqNr = newConfirmedSeqNr,
-                requestedSeqNr = newRequestedSeqNr,
-                registering = updatedRegistering(s, seqMsg)),
-              seqMsg)
+            waitingForConfirmation(s.copy(receivedSeqNr = seqNr, registering = s.updatedRegistering(seqMsg)), seqMsg)
           }
         } else { // seqNr < expectedSeqNr
           context.log.infoN("from producer [{}], deduplicate [{}], expected [{}]", pid, seqNr, expectedSeqNr)
           if (seqMsg.first)
-            active(retryRequest(s).copy(registering = updatedRegistering(s, seqMsg)))
+            active(retryRequest(s).copy(registering = s.updatedRegistering(seqMsg)))
           else
-            active(s.copy(registering = updatedRegistering(s, seqMsg)))
+            active(s.copy(registering = s.updatedRegistering(seqMsg)))
         }
 
       case Retry =>
-        s.registering match {
-          case None =>
-            active(retryRequest(s))
-          case Some(reg) =>
-            reg ! ProducerController.RegisterConsumer(context.self)
-            Behaviors.same
-        }
+        receiveRetry(s, () => active(retryRequest(s)))
 
       case Confirmed(seqNr) =>
-        context.log.warn("Unexpected confirmed [{}]", seqNr)
-        Behaviors.unhandled
+        receiveUnexpectedConfirmed(seqNr)
 
       case start: Start[A] =>
-        // if consumer is restarted it may send Start again
-        context.unwatch(s.consumer)
-        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
-        active(s.copy(consumer = start.deliverTo))
+        receiveStart(s, start, newState => active(newState))
 
       case ConsumerTerminated(c) =>
-        context.log.info("Consumer [{}] terminated", c)
-        Behaviors.stopped
+        receiveConsumerTerminated(c)
 
       case reg: RegisterToProducerController[A] =>
-        if (reg.producerController != s.producer) {
-          context.log.info2(
-            "Register to new ProducerController [{}], previous was [{}]",
-            reg.producerController,
-            s.producer)
-          reg.producerController ! ProducerController.RegisterConsumer(context.self)
-          active(s.copy(registering = Some(reg.producerController)))
-        } else {
-          Behaviors.same
-        }
+        receiveRegisterToProducerController(s, reg, newState => active(newState))
     }
   }
 
-  private def isExpected(s: State[A], seqMsg: SequencedMessage[A]): Boolean = {
-    val expectedSeqNr = s.receivedSeqNr + 1
-    seqMsg.seqNr == expectedSeqNr ||
-    (seqMsg.first && seqMsg.seqNr >= expectedSeqNr) ||
-    (seqMsg.first && seqMsg.producer != s.producer)
-  }
+  private def receiveChangedProducer(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
+    val pid = seqMsg.producerId
+    val seqNr = seqMsg.seqNr
 
-  private def updatedRegistering(
-      s: State[A],
-      seqMsg: SequencedMessage[A]): Option[ActorRef[ProducerController.Command[A]]] = {
-    s.registering match {
-      case None          => None
-      case s @ Some(reg) => if (seqMsg.producer == reg) None else s
+    if (seqMsg.first) {
+      context.log.infoN(
+        "changing producer [{}] from [{}] to [{}], seqNr [{}]",
+        seqMsg.producerId,
+        s.producer,
+        seqMsg.producer,
+        seqNr)
+
+      val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
+      context.log.info("Request first [{}]", newRequestedSeqNr)
+      seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
+
+      deliver(
+        s.copy(
+          producer = seqMsg.producer,
+          receivedSeqNr = seqNr,
+          confirmedSeqNr = 0L,
+          requestedSeqNr = newRequestedSeqNr,
+          registering = s.updatedRegistering(seqMsg)),
+        seqMsg)
+    } else {
+      context.log.infoN(
+        "from producer [{}], discarding message because was from unexpected producer [{}] when expecting [{}], seqNr [{}]",
+        pid,
+        seqMsg.producer,
+        s.producer,
+        seqNr)
+      Behaviors.same
     }
   }
 
@@ -359,46 +298,17 @@ private class ConsumerController[A](
         val pid = seqMsg.producerId
         val seqNr = seqMsg.seqNr
 
-        if (s.registering.isDefined && !seqMsg.first) {
+        if (s.isProducerChanged(seqMsg)) {
+          receiveChangedProducer(s, seqMsg)
+        } else if (s.registering.isDefined) {
           context.log.infoN(
             "from producer [{}], discarding message because registering to new ProducerController, seqNr [{}]",
             pid,
             seqNr)
           Behaviors.same
-        } else if (seqMsg.producer != s.producer && !seqMsg.first) {
-          context.log.infoN(
-            "from producer [{}], discarding message because unexpected producer ActorRef, seqNr [{}]",
-            pid,
-            seqNr)
-          Behaviors.same
-        } else if (isExpected(s, seqMsg)) {
-          logIfChangingProducer(s.producer, seqMsg, pid, seqNr)
-          context.log.infoN(
-            "from producer [{}], received {} [{}]",
-            pid,
-            if (seqMsg.first) "first" else "missing",
-            seqNr)
-          context.log.info("from producer [{}], deliver [{}] to consumer", pid, seqNr)
-          s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
-
-          val (newConfirmedSeqNr, newRequestedSeqNr) =
-            if (seqMsg.first && seqMsg.producer != s.producer) {
-              val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
-              context.log.info("Request first [{}]", newRequestedSeqNr)
-              seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
-              (0L, newRequestedSeqNr)
-            } else {
-              (s.confirmedSeqNr, s.requestedSeqNr)
-            }
-
-          waitingForConfirmation(
-            s.copy(
-              producer = seqMsg.producer,
-              receivedSeqNr = seqNr,
-              confirmedSeqNr = newConfirmedSeqNr,
-              requestedSeqNr = newRequestedSeqNr,
-              registering = updatedRegistering(s, seqMsg)),
-            seqMsg)
+        } else if (s.isNextExpected(seqMsg)) {
+          context.log.infoN("from producer [{}], received missing [{}]", pid, seqNr)
+          deliver(s.copy(receivedSeqNr = seqNr, registering = s.updatedRegistering(seqMsg)), seqMsg)
         } else {
           context.log.infoN("from producer [{}], ignoring [{}], waiting for [{}]", pid, seqNr, s.receivedSeqNr + 1)
           if (seqMsg.first)
@@ -407,43 +317,31 @@ private class ConsumerController[A](
         }
 
       case Retry =>
-        s.registering match {
-          case None =>
-            // in case the Resend message was lost
-            context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
-            s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
-            Behaviors.same
-          case Some(reg) =>
-            reg ! ProducerController.RegisterConsumer(context.self)
-            Behaviors.same
-        }
+        receiveRetry(s, () => {
+          // in case the Resend message was lost
+          context.log.info("retry Resend [{}]", s.receivedSeqNr + 1)
+          s.producer ! Resend(fromSeqNr = s.receivedSeqNr + 1)
+          Behaviors.same
+        })
 
       case Confirmed(seqNr) =>
-        context.log.warn("Unexpected confirmed [{}]", seqNr)
-        Behaviors.unhandled
+        receiveUnexpectedConfirmed(seqNr)
 
       case start: Start[A] =>
-        // if consumer is restarted it may send Start again
-        context.unwatch(s.consumer)
-        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
-        resending(s.copy(consumer = start.deliverTo))
+        receiveStart(s, start, newState => resending(newState))
 
       case ConsumerTerminated(c) =>
-        context.log.info("Consumer [{}] terminated", c)
-        Behaviors.stopped
+        receiveConsumerTerminated(c)
 
       case reg: RegisterToProducerController[A] =>
-        if (reg.producerController != s.producer) {
-          context.log.info2(
-            "Register to new ProducerController [{}], previous was [{}]",
-            reg.producerController,
-            s.producer)
-          reg.producerController ! ProducerController.RegisterConsumer(context.self)
-          resending(s.copy(registering = Some(reg.producerController)))
-        } else {
-          Behaviors.same
-        }
+        receiveRegisterToProducerController(s, reg, newState => active(newState))
     }
+  }
+
+  private def deliver(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
+    context.log.info("from producer [{}], deliver [{}] to consumer", seqMsg.producerId, seqMsg.seqNr)
+    s.consumer ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
+    waitingForConfirmation(s, seqMsg)
   }
 
   // The message has been delivered to the consumer and it is now waiting for Confirmed from
@@ -502,38 +400,64 @@ private class ConsumerController[A](
         Behaviors.same
 
       case Retry =>
-        s.registering match {
-          case None => waitingForConfirmation(retryRequest(s), seqMsg)
-          case Some(reg) =>
-            reg ! ProducerController.RegisterConsumer(context.self)
-            Behaviors.same
-        }
+        receiveRetry(s, () => waitingForConfirmation(retryRequest(s), seqMsg))
 
       case start: Start[A] =>
-        // if consumer is restarted it may send Start again
-        context.unwatch(s.consumer)
-        context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
-        context.log.info("from producer [{}], deliver [{}] to consumer, after Start", seqMsg.producerId, seqMsg.seqNr)
         start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
-        waitingForConfirmation(s.copy(consumer = start.deliverTo), seqMsg)
+        receiveStart(s, start, newState => waitingForConfirmation(newState, seqMsg))
 
       case ConsumerTerminated(c) =>
-        context.log.info("Consumer [{}] terminated", c)
-        Behaviors.stopped
+        receiveConsumerTerminated(c)
 
       case reg: RegisterToProducerController[A] =>
-        if (reg.producerController != s.producer) {
-          context.log.info2(
-            "Register to new ProducerController [{}], previous was [{}]",
-            reg.producerController,
-            s.producer)
-          reg.producerController ! ProducerController.RegisterConsumer(context.self)
-          resending(s.copy(registering = Some(reg.producerController)))
-          waitingForConfirmation(s.copy(registering = Some(reg.producerController)), seqMsg)
-        } else {
-          Behaviors.same
-        }
+        receiveRegisterToProducerController(s, reg, newState => waitingForConfirmation(newState, seqMsg))
     }
+  }
+
+  private def receiveRetry(s: State[A], nextBehavior: () => Behavior[InternalCommand]): Behavior[InternalCommand] = {
+    s.registering match {
+      case None => nextBehavior()
+      case Some(reg) =>
+        reg ! ProducerController.RegisterConsumer(context.self)
+        Behaviors.same
+    }
+  }
+
+  private def receiveStart(
+      s: State[A],
+      start: Start[A],
+      nextBehavior: State[A] => Behavior[InternalCommand]): Behavior[InternalCommand] = {
+    // if consumer is restarted it may send Start again
+    context.unwatch(s.consumer)
+    context.watchWith(start.deliverTo, ConsumerTerminated(start.deliverTo))
+    nextBehavior(s.copy(consumer = start.deliverTo))
+  }
+
+  private def receiveRegisterToProducerController(
+      s: State[A],
+      reg: RegisterToProducerController[A],
+      nextBehavior: State[A] => Behavior[InternalCommand]): Behavior[InternalCommand] = {
+    if (reg.producerController != s.producer) {
+      context.log.info2(
+        "Register to new ProducerController [{}], previous was [{}]",
+        reg.producerController,
+        s.producer)
+      reg.producerController ! ProducerController.RegisterConsumer(context.self)
+      resending(s.copy(registering = Some(reg.producerController)))
+      nextBehavior(s.copy(registering = Some(reg.producerController)))
+    } else {
+      Behaviors.same
+    }
+  }
+
+  private def receiveConsumerTerminated(c: ActorRef[_]): Behavior[InternalCommand] = {
+    context.log.info("Consumer [{}] terminated", c)
+    Behaviors.stopped
+  }
+
+  private def receiveUnexpectedConfirmed(seqNr: SeqNr): Behavior[InternalCommand] = {
+    context.log.warn("Unexpected confirmed [{}]", seqNr)
+    Behaviors.unhandled
   }
 
   private def startRetryTimer(): Unit = {
@@ -547,20 +471,6 @@ private class ConsumerController[A](
     // FIXME may watch the producer to avoid sending retry Request to dead producer
     s.producer ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
     s.copy(requestedSeqNr = newRequestedSeqNr)
-  }
-
-  private def logIfChangingProducer(
-      producer: ActorRef[ProducerController.InternalCommand],
-      seqMsg: SequencedMessage[A],
-      producerId: String,
-      seqNr: SeqNr): Unit = {
-    if (seqMsg.producer != producer)
-      context.log.infoN(
-        "changing producer [{}] from [{}] to [{}], seqNr [{}]",
-        producerId,
-        producer,
-        seqMsg.producer,
-        seqNr)
   }
 
 }
