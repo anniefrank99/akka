@@ -28,7 +28,30 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe.ref)
       producerControllerProbe.expectMessage(ProducerController.RegisterConsumer(consumerController))
+      // expected resend
       producerControllerProbe.expectMessage(ProducerController.RegisterConsumer(consumerController))
+
+      testKit.stop(consumerController)
+    }
+
+    "resend RegisterConsumer when changed to different ProducerController" in {
+      nextId()
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
+      val producerControllerProbe1 = createTestProbe[ProducerController.InternalCommand]()
+
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+      consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe1.ref)
+      producerControllerProbe1.expectMessage(ProducerController.RegisterConsumer(consumerController))
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe1.ref)
+
+      // change producer
+      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe2.ref)
+      producerControllerProbe2.expectMessage(ProducerController.RegisterConsumer(consumerController))
+      // expected resend
+      producerControllerProbe2.expectMessage(ProducerController.RegisterConsumer(consumerController))
 
       testKit.stop(consumerController)
     }
