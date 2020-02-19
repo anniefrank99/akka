@@ -11,6 +11,7 @@ import scala.concurrent.duration._
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import ConsumerController.SequencedMessage
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 
@@ -41,7 +42,7 @@ object TestConsumer {
       producerController: ActorRef[ProducerController.Command[TestConsumer.Job]],
       ack: Boolean = false): SequencedMessage[TestConsumer.Job] = {
     ConsumerController.SequencedMessage(producerId, n, TestConsumer.Job(s"msg-$n"), first = n == 1, ack)(
-      producerController.unsafeUpcast[ProducerController.InternalCommand])
+      producerController.unsafeUpcast[ProducerControllerImpl.InternalCommand])
   }
 
   def consumerEndCondition(seqNr: Long): TestConsumer.SomeAsyncJob => Boolean = {

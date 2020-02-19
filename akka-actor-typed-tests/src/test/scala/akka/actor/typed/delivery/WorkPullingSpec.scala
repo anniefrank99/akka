@@ -10,6 +10,7 @@ import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -89,7 +90,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
@@ -109,7 +110,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       val seqMsg2 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg2.msg should ===(TestConsumer.Job("msg-2"))
       seqMsg2.seqNr should ===(1)
-      seqMsg2.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg2.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
         TestConsumer.Job("msg-3"))
@@ -142,7 +143,7 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
       seqMsg1.ack should ===(true)
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
@@ -151,13 +152,13 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       seqMsg2.ack should ===(true)
       // no reply until ack
       replyProbe.expectNoMessage()
-      seqMsg2.producer ! ProducerController.Internal.Ack(2L)
+      seqMsg2.producer ! ProducerControllerImpl.Ack(2L)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyProbe.ref)
       workerController1Probe.receiveMessages(2)
-      seqMsg2.producer ! ProducerController.Internal.Ack(4L)
+      seqMsg2.producer ! ProducerControllerImpl.Ack(4L)
       replyProbe.receiveMessages(2)
 
       workerController1Probe.stop()
@@ -182,12 +183,12 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
       workerController1Probe.receiveMessage()
-      seqMsg1.producer ! ProducerController.Internal.Ack(2L)
+      seqMsg1.producer ! ProducerControllerImpl.Ack(2L)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyProbe.ref)
@@ -206,12 +207,12 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       val seqMsg3 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg3.msg should ===(TestConsumer.Job("msg-3"))
       seqMsg3.seqNr should ===(1)
-      seqMsg3.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg3.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
       workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
         TestConsumer.Job("msg-4"))
-      seqMsg3.producer ! ProducerController.Internal.Ack(2L)
+      seqMsg3.producer ! ProducerControllerImpl.Ack(2L)
       replyProbe.receiveMessage()
 
       workerController2Probe.stop()

@@ -12,6 +12,7 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import DurableProducerQueue.MessageSent
 import ProducerController.MessageWithConfirmation
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
 class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
@@ -44,7 +45,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -56,7 +57,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
       consumerControllerProbe.expectMessage(
         sequencedMessage(producerId, 3, producerController).copy(first = true)(producerController))
       consumerControllerProbe.expectNoMessage(50.millis)
-      producerController ! ProducerController.Internal.Request(3L, 13L, true, false)
+      producerController ! ProducerControllerImpl.Request(3L, 13L, true, false)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
 
       val sendTo = producerProbe.receiveMessage().sendNextTo
@@ -79,7 +80,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -92,7 +93,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
           DurableProducerQueue
             .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
       }
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
       producerProbe.awaitAssert {
         stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Map(NoQualifier -> 1), Vector.empty))
       }
@@ -104,7 +105,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController, ack = true))
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController, ack = true))
-      producerController ! ProducerController.Internal.Ack(3)
+      producerController ! ProducerControllerImpl.Ack(3)
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
           DurableProducerQueue.State(
@@ -126,7 +127,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -138,7 +139,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
       replyTo.expectMessage(1L)
 
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController, ack = true))
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
       replyTo.expectMessage(2L)

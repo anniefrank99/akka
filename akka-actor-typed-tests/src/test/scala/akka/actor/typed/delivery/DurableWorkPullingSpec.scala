@@ -13,6 +13,7 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import DurableProducerQueue.MessageSent
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -84,7 +85,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val seqMsg3 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg3.msg should ===(TestConsumer.Job("msg-3"))
-      seqMsg3.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg3.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
         TestConsumer.Job("msg-4"))
@@ -116,7 +117,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
       seqMsg1.ack should ===(true)
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 10L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
@@ -125,13 +126,13 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val seqMsg2 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg2.msg should ===(TestConsumer.Job("msg-2"))
       seqMsg2.ack should ===(true)
-      seqMsg2.producer ! ProducerController.Internal.Ack(2L)
+      seqMsg2.producer ! ProducerControllerImpl.Ack(2L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyProbe.ref)
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-4"), replyProbe.ref)
       replyProbe.receiveMessages(2)
       workerController1Probe.receiveMessages(2)
-      seqMsg2.producer ! ProducerController.Internal.Ack(4L)
+      seqMsg2.producer ! ProducerControllerImpl.Ack(4L)
 
       workerController1Probe.stop()
       awaitWorkersRegistered(workPullingController, 0)
@@ -169,7 +170,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       }
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 5L, true, false)
       producerProbe.awaitAssert {
         assertState(stateHolder.get(), DurableProducerQueue.State(2, 1, Map.empty, Vector.empty))
       }
@@ -224,7 +225,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val seqMsg6 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg6.msg should ===(TestConsumer.Job("msg-6"))
       seqMsg6.seqNr should ===(1) // different ProducerController-ConsumerController
-      seqMsg6.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
+      seqMsg6.producer ! ProducerControllerImpl.Request(1L, 5L, true, false)
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),
@@ -239,7 +240,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
               MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
       }
 
-      seqMsg1.producer ! ProducerController.Internal.Ack(3)
+      seqMsg1.producer ! ProducerControllerImpl.Ack(3)
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),
@@ -288,7 +289,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       }
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
-      seqMsg1.producer ! ProducerController.Internal.Request(1L, 5L, true, false)
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 5L, true, false)
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
@@ -323,7 +324,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val seqMsg6 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg6.msg should ===(TestConsumer.Job("msg-6"))
       // note that it's only requesting 3
-      seqMsg6.producer ! ProducerController.Internal.Request(1L, 3L, true, false)
+      seqMsg6.producer ! ProducerControllerImpl.Request(1L, 3L, true, false)
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),
@@ -351,13 +352,13 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       // but it has only requested 3 so no more
       workerController2Probe.expectNoMessage()
       // then request more, and confirm 3
-      seqMsg8.producer ! ProducerController.Internal.Request(3L, 10L, true, false)
+      seqMsg8.producer ! ProducerControllerImpl.Request(3L, 10L, true, false)
       val seqMsg9 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg9.msg should ===(TestConsumer.Job("msg-4"))
       val seqMsg10 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg10.msg should ===(TestConsumer.Job("msg-5"))
 
-      seqMsg9.producer ! ProducerController.Internal.Ack(seqMsg9.seqNr)
+      seqMsg9.producer ! ProducerControllerImpl.Ack(seqMsg9.seqNr)
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),

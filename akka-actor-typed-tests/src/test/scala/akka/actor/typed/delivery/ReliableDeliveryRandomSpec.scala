@@ -14,6 +14,7 @@ import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.Behavior
 import akka.actor.typed.BehaviorInterceptor
 import akka.actor.typed.TypedActorContext
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -92,8 +93,8 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
 
     // RandomFlakyNetwork to simulate lost messages from consumerController to producerController
     val producerDrop: Any => Double = {
-      case _: ProducerController.Internal.Request    => producerDropProbability
-      case _: ProducerController.Internal.Resend     => producerDropProbability
+      case _: ProducerControllerImpl.Request         => producerDropProbability
+      case _: ProducerControllerImpl.Resend          => producerDropProbability
       case _: ProducerController.RegisterConsumer[_] => producerDropProbability
       case _                                         => 0.0
     }

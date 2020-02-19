@@ -6,6 +6,8 @@ package akka.actor.typed.delivery
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import akka.actor.typed.delivery.internal.ConsumerControllerImpl
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
 class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
@@ -24,7 +26,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe.ref)
       producerControllerProbe.expectMessage(ProducerController.RegisterConsumer(consumerController))
@@ -39,7 +41,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-      val producerControllerProbe1 = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe1 = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       consumerController ! ConsumerController.Start(consumerProbe.ref)
       consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe1.ref)
@@ -47,7 +49,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe1.ref)
 
       // change producer
-      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! ConsumerController.RegisterToProducerController(producerControllerProbe2.ref)
       producerControllerProbe2.expectMessage(ProducerController.RegisterConsumer(consumerController))
       // expected resend
@@ -60,8 +62,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
 
@@ -70,11 +72,11 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, true))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, true))
 
       consumerController ! ConsumerController.Confirmed(1)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       testKit.stop(consumerController)
     }
@@ -84,8 +86,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val windowSize = 20
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -94,12 +96,12 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
         consumerController ! sequencedMessage(producerId, n, producerControllerProbe.ref)
       }
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, windowSize, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, windowSize, true, false))
       (1 until windowSize / 2).foreach { n =>
         consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
         consumerController ! ConsumerController.Confirmed(n)
         if (n == 1)
-          producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, windowSize, true, false))
+          producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, windowSize, true, false))
       }
 
       producerControllerProbe.expectNoMessage()
@@ -110,7 +112,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerControllerProbe.expectNoMessage()
       consumerController ! ConsumerController.Confirmed(windowSize / 2)
       producerControllerProbe.expectMessage(
-        ProducerController.Internal.Request(windowSize / 2, windowSize + windowSize / 2, true, false))
+        ProducerControllerImpl.Request(windowSize / 2, windowSize + windowSize / 2, true, false))
 
       testKit.stop(consumerController)
     }
@@ -119,8 +121,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -129,15 +131,15 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(2)
 
       consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Resend(3))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Resend(3))
 
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
@@ -157,8 +159,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -167,8 +169,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
@@ -177,10 +179,10 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(2, 20, true, true))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(2, 20, true, true))
 
       consumerController ! ConsumerController.Confirmed(3)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(3, 20, true, true))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(3, 20, true, true))
 
       testKit.stop(consumerController)
     }
@@ -189,8 +191,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -199,8 +201,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
@@ -242,8 +244,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -252,13 +254,13 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref, ack = true)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(2)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(2))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(2))
 
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref, ack = true)
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref, ack = false)
@@ -266,12 +268,12 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
       consumerController ! ConsumerController.Confirmed(3)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(3))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(3))
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
       consumerController ! ConsumerController.Confirmed(4)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
       consumerController ! ConsumerController.Confirmed(5)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Ack(5))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(5))
 
       testKit.stop(consumerController)
     }
@@ -280,8 +282,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe1.ref)
@@ -290,8 +292,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
@@ -318,9 +320,9 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
 
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe1.ref)
@@ -337,7 +339,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
 
       val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe1.ref)
@@ -350,28 +352,28 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       // that Request will typically cancel the resending of first, but in unlucky timing it may happen
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       // deduplicated, not delivered again
       consumerProbe.expectNoMessage()
 
       // but if the ProducerController is changed it will not be deduplicated
-      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe2.ref)
-      producerControllerProbe2.expectMessage(ProducerController.Internal.Request(0, 20, true, false))
+      producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
-      producerControllerProbe2.expectMessage(ProducerController.Internal.Request(1, 20, true, false))
+      producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       testKit.stop(consumerController)
     }
@@ -380,30 +382,30 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       producerControllerProbe.expectMessage(
-        ProducerController.Internal.Request(0, ConsumerController.RequestWindow, true, false))
+        ProducerControllerImpl.Request(0, ConsumerController.RequestWindow, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
 
       // and if the ProducerController is changed
-      val producerControllerProbe2 = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref)
         .copy(first = true)(producerControllerProbe2.ref)
       producerControllerProbe2.expectMessage(
-        ProducerController.Internal.Request(0, 23 + ConsumerController.RequestWindow - 1, true, false))
+        ProducerControllerImpl.Request(0, 23 + ConsumerController.RequestWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(23)
 
-      val producerControllerProbe3 = createTestProbe[ProducerController.InternalCommand]()
+      val producerControllerProbe3 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref)
         .copy(first = true)(producerControllerProbe3.ref)
       producerControllerProbe3.expectMessage(
-        ProducerController.Internal.Request(0, 7 + ConsumerController.RequestWindow - 1, true, false))
+        ProducerControllerImpl.Request(0, 7 + ConsumerController.RequestWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(7)
 
       testKit.stop(consumerController)
@@ -413,8 +415,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
 
@@ -426,14 +428,14 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 45, producerControllerProbe.ref)
 
       consumerController ! ConsumerController.Start(consumerProbe.ref)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 60, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 60, true, false))
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(41)
       consumerController ! ConsumerController.Confirmed(41)
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(41, 60, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(41, 60, true, false))
 
       // 45 not expected
-      producerControllerProbe.expectMessage(ProducerController.Internal.Resend(42))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Resend(42))
 
       // from previous Resend request
       consumerController ! sequencedMessage(producerId, 42, producerControllerProbe.ref)
@@ -463,8 +465,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       nextId()
       val consumerController =
         spawn(ConsumerController.onlyFlowControl[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerController.InternalCommand]
-      val producerControllerProbe = createTestProbe[ProducerController.InternalCommand]()
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       consumerController ! ConsumerController.Start(consumerProbe.ref)
@@ -473,8 +475,8 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       consumerController ! ConsumerController.Confirmed(1)
 
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(0, 20, supportResend = false, false))
-      producerControllerProbe.expectMessage(ProducerController.Internal.Request(1, 20, supportResend = false, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, supportResend = false, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, supportResend = false, false))
 
       // skipping 2
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)

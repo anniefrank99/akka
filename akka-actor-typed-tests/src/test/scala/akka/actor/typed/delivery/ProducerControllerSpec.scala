@@ -9,6 +9,7 @@ import scala.concurrent.duration._
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import ProducerController.MessageWithConfirmation
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
 class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
@@ -44,8 +45,8 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       // `SequencedMessage` is lost the ProducerController will resend the SequencedMessage
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
 
-      val internalProducerController = producerController.unsafeUpcast[ProducerController.InternalCommand]
-      internalProducerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      val internalProducerController = producerController.unsafeUpcast[ProducerControllerImpl.InternalCommand]
+      internalProducerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
       consumerControllerProbe.expectNoMessage(1100.millis)
 
       testKit.stop(producerController)
@@ -57,7 +58,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -66,7 +67,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
 
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController))
@@ -77,7 +78,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
 
       // let's say 3 is lost, when 4 is received the ConsumerController detects the gap and sends Resend(3)
-      producerController ! ProducerController.Internal.Resend(3)
+      producerController ! ProducerControllerImpl.Resend(3)
 
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController))
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
@@ -94,7 +95,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -103,7 +104,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
 
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController))
@@ -115,7 +116,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       // let's say 3 and 4 are lost, and no more messages are sent from producer
       // ConsumerController will resend Request periodically
-      producerController ! ProducerController.Internal.Request(2L, 10L, true, true)
+      producerController ! ProducerControllerImpl.Request(2L, 10L, true, true)
 
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController))
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
@@ -131,7 +132,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -141,7 +142,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       consumerControllerProbe1.expectMessage(sequencedMessage(producerId, 1, producerController))
 
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
@@ -156,7 +157,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerControllerProbe2.expectMessage(
         sequencedMessage(producerId, 2, producerController).copy(first = true)(producerController))
 
-      producerController ! ProducerController.Internal.Request(2L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(2L, 10L, true, false)
       // then the other unconfirmed should be resent
       consumerControllerProbe2.expectMessage(sequencedMessage(producerId, 3, producerController))
 
@@ -172,7 +173,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -182,12 +183,12 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController, ack = true))
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyTo.expectMessage(1L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController, ack = true))
-      producerController ! ProducerController.Internal.Ack(2L)
+      producerController ! ProducerControllerImpl.Ack(2L)
       replyTo.expectMessage(2L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
@@ -195,14 +196,14 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController, ack = true))
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController, ack = true))
       // Ack(3 lost, but Ack(4) triggers reply for 3 and 4
-      producerController ! ProducerController.Internal.Ack(4L)
+      producerController ! ProducerControllerImpl.Ack(4L)
       replyTo.expectMessage(3L)
       replyTo.expectMessage(4L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-5"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 5, producerController, ack = true))
       // Ack(5) lost, but eventually a Request will trigger the reply
-      producerController ! ProducerController.Internal.Request(5L, 15L, true, false)
+      producerController ! ProducerControllerImpl.Request(5L, 15L, true, false)
       replyTo.expectMessage(5L)
 
       testKit.stop(producerController)
@@ -214,7 +215,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe1 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe1.ref)
 
@@ -222,7 +223,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
-      producerController ! ProducerController.Internal.Request(1L, 10L, true, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController))
@@ -251,7 +252,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -260,7 +261,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
 
-      producerController ! ProducerController.Internal.Request(1L, 10L, supportResend = false, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, supportResend = false, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController))
@@ -272,7 +273,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       // let's say 3 and 4 are lost, and no more messages are sent from producer
       // ConsumerController will resend Request periodically
-      producerController ! ProducerController.Internal.Request(2L, 10L, supportResend = false, true)
+      producerController ! ProducerControllerImpl.Request(2L, 10L, supportResend = false, true)
 
       // but 3 and 4 are not resent because supportResend = false
       consumerControllerProbe.expectNoMessage()
@@ -289,7 +290,7 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, None), s"producerController-${idCount}")
-          .unsafeUpcast[ProducerController.InternalCommand]
+          .unsafeUpcast[ProducerControllerImpl.InternalCommand]
       val producerProbe = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
       producerController ! ProducerController.Start(producerProbe.ref)
 
@@ -299,12 +300,12 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController, ack = true))
-      producerController ! ProducerController.Internal.Request(1L, 10L, supportResend = false, false)
+      producerController ! ProducerControllerImpl.Request(1L, 10L, supportResend = false, false)
       replyTo.expectMessage(1L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 2, producerController, ack = true))
-      producerController ! ProducerController.Internal.Ack(2L)
+      producerController ! ProducerControllerImpl.Ack(2L)
       replyTo.expectMessage(2L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-3"), replyTo.ref)
@@ -312,14 +313,14 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController, ack = true))
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController, ack = true))
       // Ack(3 lost, but Ack(4) triggers reply for 3 and 4
-      producerController ! ProducerController.Internal.Ack(4L)
+      producerController ! ProducerControllerImpl.Ack(4L)
       replyTo.expectMessage(3L)
       replyTo.expectMessage(4L)
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-5"), replyTo.ref)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 5, producerController, ack = true))
       // Ack(5) lost, but eventually a Request will trigger the reply
-      producerController ! ProducerController.Internal.Request(5L, 15L, supportResend = false, false)
+      producerController ! ProducerControllerImpl.Request(5L, 15L, supportResend = false, false)
       replyTo.expectMessage(5L)
 
       testKit.stop(producerController)

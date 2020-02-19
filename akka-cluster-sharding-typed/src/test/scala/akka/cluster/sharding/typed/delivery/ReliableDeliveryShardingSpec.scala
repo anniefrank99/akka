@@ -12,8 +12,8 @@ import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController.SequencedMessage
-import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.delivery.TestConsumer
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.LoggerOps
 import akka.cluster.typed.Cluster
@@ -238,7 +238,7 @@ class ReliableDeliveryShardingSpec
 
       val seq1 = shardingProbe.receiveMessage().message
       seq1.msg should ===(TestConsumer.Job("msg-1"))
-      seq1.producer ! ProducerController.Internal.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
 
       val next2 = producerProbe.receiveMessage()
       next2.entitiesWithDemand should ===(Set("entity-1"))
@@ -281,14 +281,14 @@ class ReliableDeliveryShardingSpec
       producerProbe.expectNoMessage()
       val seq7 = shardingProbe.receiveMessage().message
       seq7.msg should ===(TestConsumer.Job("msg-7"))
-      seq7.producer ! ProducerController.Internal.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+      seq7.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
 
       val next8 = producerProbe.receiveMessage()
       next8.entitiesWithDemand should ===(Set("entity-2"))
       next8.bufferedForEntitiesWithoutDemand should ===(Map("entity-1" -> 1))
 
       // when new demand the buffered messages will be be sent
-      seq5.producer ! ProducerController.Internal.Request(confirmedSeqNr = 5L, upToSeqNr = 10, true, false)
+      seq5.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, upToSeqNr = 10, true, false)
       val seq6 = shardingProbe.receiveMessage().message
       seq6.msg should ===(TestConsumer.Job("msg-6"))
 
