@@ -33,6 +33,9 @@ object DurableProducerQueue {
   /**
    * Store the fact that a message is to be sent. Replies with [[StoreMessageSentAck]] when
    * the message has been successfully been stored.
+   *
+   * This command may be retied and the implementation should be idempotent, i.e. deduplicate
+   * already processed sequence numbers.
    */
   final case class StoreMessageSent[A](sent: MessageSent[A], replyTo: ActorRef[StoreMessageSentAck]) extends Command[A]
 
@@ -40,6 +43,9 @@ object DurableProducerQueue {
 
   /**
    * Store the fact that a message has been confirmed to be delivered and processed.
+   *
+   * This command may be retied and the implementation should be idempotent, i.e. deduplicate
+   * already processed sequence numbers.
    */
   final case class StoreMessageConfirmed[A](seqNr: SeqNr, confirmationQualifier: ConfirmationQualifier)
       extends Command[A]

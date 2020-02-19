@@ -4,6 +4,8 @@
 
 package akka.cluster.sharding.typed.delivery.internal
 
+import java.util.concurrent.TimeoutException
+
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
 import scala.util.Failure
@@ -87,13 +89,14 @@ import akka.util.Timeout
   def apply[A: ClassTag](
       producerId: String,
       region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
-      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]]): Behavior[Command[A]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
+      settings: ShardingProducerController.Settings): Behavior[Command[A]] = {
     Behaviors
-      .withStash[InternalCommand](1000) { stashBuffer => // FIXME stash config
+      .withStash[InternalCommand](settings.bufferSize) { stashBuffer =>
         Behaviors.setup[InternalCommand] { context =>
           context.setLoggerName("akka.cluster.sharding.typed.delivery.ShardingProducerController")
 
-          val durableQueue = askLoadState(context, durableQueueBehavior)
+          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
 
           waitingForStart(
             producerId,
@@ -102,13 +105,12 @@ import akka.util.Timeout
             region,
             durableQueue,
             None,
-            createInitialState(durableQueue.nonEmpty))
+            createInitialState(durableQueue.nonEmpty),
+            settings)
         }
       }
       .narrow
   }
-
-  // FIXME javadsl create
 
   private def createInitialState[A: ClassTag](hasDurableQueue: Boolean) = {
     if (hasDurableQueue) None else Some(DurableProducerQueue.State.empty[A])
@@ -121,11 +123,12 @@ import akka.util.Timeout
       region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
       durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
       producer: Option[ActorRef[RequestNext[A]]],
-      initialState: Option[DurableProducerQueue.State[A]]): Behavior[InternalCommand] = {
+      initialState: Option[DurableProducerQueue.State[A]],
+      settings: ShardingProducerController.Settings): Behavior[InternalCommand] = {
 
     def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
       // resend unconfirmed before other stashed messages
-      Behaviors.withStash[InternalCommand](1000) { newStashBuffer => // FIXME stash config
+      Behaviors.withStash[InternalCommand](settings.bufferSize) { newStashBuffer =>
         Behaviors.setup { _ =>
           s.unconfirmed.foreach { m =>
             newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.msg), alreadyStored = m.seqNr))
@@ -136,7 +139,7 @@ import akka.util.Timeout
           val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, alreadyStored = 0))
           if (s.unconfirmed.isEmpty)
             p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
-          val b = new ShardingProducerControllerImpl(context, producerId, p, msgAdapter, region, durableQueue)
+          val b = new ShardingProducerControllerImpl(context, producerId, p, msgAdapter, region, durableQueue, settings)
             .active(State(s.currentSeqNr, Map.empty, Map.empty))
 
           newStashBuffer.unstashAll(b)
@@ -151,7 +154,15 @@ import akka.util.Timeout
             becomeActive(start.producer, s)
           case None =>
             // waiting for LoadStateReply
-            waitingForStart(producerId, context, stashBuffer, region, durableQueue, Some(start.producer), initialState)
+            waitingForStart(
+              producerId,
+              context,
+              stashBuffer,
+              region,
+              durableQueue,
+              Some(start.producer),
+              initialState,
+              settings)
         }
 
       case load: LoadStateReply[A] @unchecked =>
@@ -160,15 +171,28 @@ import akka.util.Timeout
             becomeActive(p, load.state)
           case None =>
             // waiting for LoadStateReply
-            waitingForStart(producerId, context, stashBuffer, region, durableQueue, producer, Some(load.state))
+            waitingForStart(
+              producerId,
+              context,
+              stashBuffer,
+              region,
+              durableQueue,
+              producer,
+              Some(load.state),
+              settings)
         }
 
       case LoadStateFailed(attempt) =>
-        // FIXME attempt counter, and give up
-        context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
-        // retry
-        askLoadState(context, durableQueue, attempt + 1)
-        Behaviors.same
+        if (attempt >= settings.producerControllerSettings.durableQueueRetryAttempts) {
+          val errorMessage = s"LoadState failed after [$attempt] attempts, giving up."
+          context.log.error(errorMessage)
+          throw new TimeoutException(errorMessage)
+        } else {
+          context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+          // retry
+          askLoadState(context, durableQueue, settings, attempt + 1)
+          Behaviors.same
+        }
 
       case other =>
         stashBuffer.stash(other)
@@ -178,13 +202,13 @@ import akka.util.Timeout
 
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
-      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]])
-      : Option[ActorRef[DurableProducerQueue.Command[A]]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
+      settings: ShardingProducerController.Settings): Option[ActorRef[DurableProducerQueue.Command[A]]] = {
 
     durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
       context.watch(ref) // FIXME handle terminated, but it's not supposed to be restarted so death pact is alright
-      askLoadState(context, Some(ref), attempt = 1)
+      askLoadState(context, Some(ref), settings, attempt = 1)
       ref
     }
   }
@@ -192,8 +216,9 @@ import akka.util.Timeout
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
       durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      settings: ShardingProducerController.Settings,
       attempt: Int): Unit = {
-    implicit val loadTimeout: Timeout = 3.seconds // FIXME config
+    implicit val loadTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
     durableQueue.foreach { ref =>
       context.ask[DurableProducerQueue.LoadState[A], DurableProducerQueue.State[A]](
         ref,
@@ -212,7 +237,8 @@ private class ShardingProducerControllerImpl[A: ClassTag](
     producer: ActorRef[ShardingProducerController.RequestNext[A]],
     msgAdapter: ActorRef[ShardingEnvelope[A]],
     region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
-    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]]) {
+    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+    settings: ShardingProducerController.Settings) {
   import DurableProducerQueue.MessageSent
   import DurableProducerQueue.StoreMessageConfirmed
   import DurableProducerQueue.StoreMessageSent
@@ -221,6 +247,12 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   import ShardingProducerController.MessageWithConfirmation
   import ShardingProducerController.RequestNext
   import ShardingProducerControllerImpl._
+
+  // for the durableQueue StoreMessageSent ask
+  private implicit val askTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
+
+  // not important since actual producer ask will have it's own timeout
+  private val sendTimeout: Timeout = 60.seconds
 
   private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WrappedRequestNext.apply)
@@ -261,7 +293,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
             val send: ConsumerController.SequencedMessage[A] => Unit = { seqMsg =>
               region ! ShardingEnvelope(entityId, seqMsg)
             }
-            val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None, send), entityId)
+            val p = context.spawn(
+              ProducerController[A](outKey, durableQueueBehavior = None, settings.producerControllerSettings, send),
+              entityId)
             p ! ProducerController.Start(requestNextAdapter)
             s.copy(
               out = s.out.updated(
@@ -309,11 +343,17 @@ private class ShardingProducerControllerImpl[A: ClassTag](
     }
 
     def receiveStoreMessageSentFailed(f: StoreMessageSentFailed[A]): Behavior[InternalCommand] = {
-      // FIXME attempt counter, and give up
-      context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
-      // retry
-      storeMessageSent(f.messageSent, attempt = f.attempt + 1)
-      Behaviors.same
+      if (f.attempt >= settings.producerControllerSettings.durableQueueRetryAttempts) {
+        val errorMessage =
+          s"StoreMessageSentFailed seqNr [${f.messageSent.seqNr}] failed after [${f.attempt}] attempts, giving up."
+        context.log.error(errorMessage)
+        throw new TimeoutException(errorMessage)
+      } else {
+        context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+        // retry
+        storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+        Behaviors.same
+      }
     }
 
     def receiveAck(ack: Ack): Behavior[InternalCommand] = {
@@ -415,7 +455,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
   private def send(msg: A, outKey: OutKey, outSeqNr: OutSeqNr, nextTo: ProducerController.RequestNext[A]): Unit = {
     context.log.info("send [{}], outSeqNr [{}]", msg, outSeqNr) // FIXME remove
-    implicit val askTimeout: Timeout = 60.seconds // FIXME config
+    implicit val askTimeout: Timeout = sendTimeout
     context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
       nextTo.askNextTo,
       ProducerController.MessageWithConfirmation(msg, _)) {
@@ -429,7 +469,6 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   }
 
   private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
-    implicit val askTimeout: Timeout = 3.seconds // FIXME config
     context.ask[StoreMessageSent[A], StoreMessageSentAck](
       durableQueue.get,
       askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {

@@ -6,6 +6,7 @@ package akka.actor.typed.delivery.internal
 
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
+import java.util.concurrent.TimeoutException
 
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
@@ -113,22 +114,24 @@ import akka.util.Timeout
   def apply[A: ClassTag](
       producerId: String,
       workerServiceKey: ServiceKey[ConsumerController.Command[A]],
-      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]]): Behavior[Command[A]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
+      settings: WorkPullingProducerController.Settings): Behavior[Command[A]] = {
     Behaviors
-      .withStash[InternalCommand](1000) { stashBuffer => // FIXME stash config
+      .withStash[InternalCommand](settings.bufferSize) { stashBuffer =>
         Behaviors.setup[InternalCommand] { context =>
           context.setLoggerName("akka.actor.typed.delivery.WorkPullingProducerController")
           val listingAdapter = context.messageAdapter[Receptionist.Listing](listing =>
             CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
           context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
 
-          val durableQueue = askLoadState(context, durableQueueBehavior)
+          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
 
           waitingForStart(
             producerId,
             context,
             stashBuffer,
             durableQueue,
+            settings,
             None,
             createInitialState(durableQueue.nonEmpty))
         }
@@ -145,6 +148,7 @@ import akka.util.Timeout
       context: ActorContext[InternalCommand],
       stashBuffer: StashBuffer[InternalCommand],
       durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      settings: WorkPullingProducerController.Settings,
       producer: Option[ActorRef[RequestNext[A]]],
       initialState: Option[DurableProducerQueue.State[A]]): Behavior[InternalCommand] = {
 
@@ -157,8 +161,9 @@ import akka.util.Timeout
 
       val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
       val requestNext = RequestNext[A](msgAdapter, context.self)
-      val b = new WorkPullingProducerControllerImpl(context, stashBuffer, producerId, p, requestNext, durableQueue)
-        .active(State.empty[A].copy(currentSeqNr = s.currentSeqNr))
+      val b =
+        new WorkPullingProducerControllerImpl(context, stashBuffer, producerId, p, requestNext, durableQueue, settings)
+          .active(State.empty[A].copy(currentSeqNr = s.currentSeqNr))
       stashBuffer.unstashAll(b)
     }
 
@@ -169,7 +174,14 @@ import akka.util.Timeout
             becomeActive(start.producer, s)
           case None =>
             // waiting for LoadStateReply
-            waitingForStart(producerId, context, stashBuffer, durableQueue, Some(start.producer), initialState)
+            waitingForStart(
+              producerId,
+              context,
+              stashBuffer,
+              durableQueue,
+              settings,
+              Some(start.producer),
+              initialState)
         }
 
       case load: LoadStateReply[A] @unchecked =>
@@ -178,15 +190,20 @@ import akka.util.Timeout
             becomeActive(p, load.state)
           case None =>
             // waiting for LoadStateReply
-            waitingForStart(producerId, context, stashBuffer, durableQueue, producer, Some(load.state))
+            waitingForStart(producerId, context, stashBuffer, durableQueue, settings, producer, Some(load.state))
         }
 
       case LoadStateFailed(attempt) =>
-        // FIXME attempt counter, and give up
-        context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
-        // retry
-        askLoadState(context, durableQueue, attempt + 1)
-        Behaviors.same
+        if (attempt >= settings.producerControllerSettings.durableQueueRetryAttempts) {
+          val errorMessage = s"LoadState failed after [$attempt] attempts, giving up."
+          context.log.error(errorMessage)
+          throw new TimeoutException(errorMessage)
+        } else {
+          context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+          // retry
+          askLoadState(context, durableQueue, settings, attempt + 1)
+          Behaviors.same
+        }
 
       case other =>
         stashBuffer.stash(other)
@@ -196,13 +213,13 @@ import akka.util.Timeout
 
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
-      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]])
-      : Option[ActorRef[DurableProducerQueue.Command[A]]] = {
+      durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
+      settings: WorkPullingProducerController.Settings): Option[ActorRef[DurableProducerQueue.Command[A]]] = {
 
     durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
       context.watch(ref) // FIXME handle terminated, but it's not supposed to be restarted so death pact is alright
-      askLoadState(context, Some(ref), attempt = 1)
+      askLoadState(context, Some(ref), settings, attempt = 1)
       ref
     }
   }
@@ -210,8 +227,9 @@ import akka.util.Timeout
   private def askLoadState[A: ClassTag](
       context: ActorContext[InternalCommand],
       durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+      settings: WorkPullingProducerController.Settings,
       attempt: Int): Unit = {
-    implicit val loadTimeout: Timeout = 3.seconds // FIXME config
+    implicit val loadTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
     durableQueue.foreach { ref =>
       context.ask[DurableProducerQueue.LoadState[A], DurableProducerQueue.State[A]](
         ref,
@@ -230,7 +248,8 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
     producerId: String,
     producer: ActorRef[WorkPullingProducerController.RequestNext[A]],
     requestNext: WorkPullingProducerController.RequestNext[A],
-    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]]) {
+    durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
+    settings: WorkPullingProducerController.Settings) {
   import DurableProducerQueue.MessageSent
   import DurableProducerQueue.StoreMessageConfirmed
   import DurableProducerQueue.StoreMessageSent
@@ -239,6 +258,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
   import WorkPullingProducerController.MessageWithConfirmation
   import WorkPullingProducerController.WorkerStats
   import WorkPullingProducerControllerImpl._
+
+  // for the durableQueue StoreMessageSent ask
+  private implicit val askTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
+
+  // not important since actual producer ask will have it's own timeout
+  private val sendTimeout: Timeout = 60.seconds
 
   private val workerRequestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WorkerRequestNext.apply)
@@ -285,7 +310,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
         case Right((outKey, out)) =>
           val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, msg, replyTo)
           val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, askNextTo = None))
-          implicit val askTimeout: Timeout = 60.seconds // FIXME config
+          implicit val askTimeout: Timeout = sendTimeout
           context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
             out.askNextTo.get,
             ProducerController.MessageWithConfirmation(msg, _)) {
@@ -433,7 +458,6 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
       if (confirmed.nonEmpty) {
         context.log.info("Confirmed seqNr [{}] from worker [{}]", confirmedSeqNr, outState.confirmationQualifier)
-        context.log.info(s"Confirmed [$confirmed], remaining unconfirmed [$newUnconfirmed]") // FIXME remove
         confirmed.foreach {
           case Unconfirmed(_, _, _, None) => // no reply
           case Unconfirmed(_, _, _, Some(replyTo)) =>
@@ -492,7 +516,9 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
         val outKey = s"$producerId-$uuid"
         // FIXME adjust all logging, most should probably be debug
         context.log.info2("Registered worker [{}], with producerId [{}]", c, outKey)
-        val p = context.spawn(ProducerController[A](outKey, durableQueueBehavior = None), uuid)
+        val p = context.spawn(
+          ProducerController[A](outKey, durableQueueBehavior = None, settings.producerControllerSettings),
+          uuid)
         p ! ProducerController.Start(workerRequestNextAdapter)
         p ! ProducerController.RegisterConsumer(c)
         acc.copy(out = acc.out.updated(outKey, OutState(p, c, 0L, Vector.empty, None)))
@@ -572,15 +598,20 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
   }
 
   private def receiveStoreMessageSentFailed(f: StoreMessageSentFailed[A]): Behavior[InternalCommand] = {
-    // FIXME attempt counter, and give up
-    context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
-    // retry
-    storeMessageSent(f.messageSent, attempt = f.attempt + 1)
-    Behaviors.same
+    if (f.attempt >= settings.producerControllerSettings.durableQueueRetryAttempts) {
+      val errorMessage =
+        s"StoreMessageSentFailed seqNr [${f.messageSent.seqNr}] failed after [${f.attempt}] attempts, giving up."
+      context.log.error(errorMessage)
+      throw new TimeoutException(errorMessage)
+    } else {
+      context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+      // retry
+      storeMessageSent(f.messageSent, attempt = f.attempt + 1)
+      Behaviors.same
+    }
   }
 
   private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
-    implicit val askTimeout: Timeout = 3.seconds // FIXME config
     context.ask[StoreMessageSent[A], StoreMessageSentAck](
       durableQueue.get,
       askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {

@@ -21,6 +21,9 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
   private def producerId: String = s"p-$idCount"
 
+  private val settings = ConsumerController.Settings(system)
+  import settings.flowControlWindow
+
   "ConsumerController" must {
     "resend RegisterConsumer" in {
       nextId()
@@ -389,23 +392,20 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! ConsumerController.Start(consumerProbe.ref)
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
-      producerControllerProbe.expectMessage(
-        ProducerControllerImpl.Request(0, ConsumerController.RequestWindow, true, false))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, flowControlWindow, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
 
       // and if the ProducerController is changed
       val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref)
         .copy(first = true)(producerControllerProbe2.ref)
-      producerControllerProbe2.expectMessage(
-        ProducerControllerImpl.Request(0, 23 + ConsumerController.RequestWindow - 1, true, false))
+      producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(0, 23 + flowControlWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(23)
 
       val producerControllerProbe3 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref)
         .copy(first = true)(producerControllerProbe3.ref)
-      producerControllerProbe3.expectMessage(
-        ProducerControllerImpl.Request(0, 7 + ConsumerController.RequestWindow - 1, true, false))
+      producerControllerProbe3.expectMessage(ProducerControllerImpl.Request(0, 7 + flowControlWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(7)
 
       testKit.stop(consumerController)
@@ -464,8 +464,9 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
     "accept lost message" in {
       nextId()
       val consumerController =
-        spawn(ConsumerController.onlyFlowControl[TestConsumer.Job](), s"consumerController-${idCount}")
-          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+        spawn(
+          ConsumerController[TestConsumer.Job](ConsumerController.Settings(system).withOnlyFlowControl(true)),
+          s"consumerController-${idCount}").unsafeUpcast[ConsumerControllerImpl.InternalCommand]
       val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()

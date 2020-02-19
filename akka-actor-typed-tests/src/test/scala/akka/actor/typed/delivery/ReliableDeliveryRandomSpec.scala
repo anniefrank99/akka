@@ -61,6 +61,8 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
       durableFailProbability: Option[Double],
       resendLost: Boolean): Unit = {
 
+    val consumerControllerSettings = ConsumerController.Settings(system).withOnlyFlowControl(!resendLost)
+
     val consumerDelay = rnd.nextInt(40).millis
     val producerDelay = rnd.nextInt(40).millis
     val durableDelay = if (durableFailProbability.isDefined) rnd.nextInt(40).millis else Duration.Zero
@@ -85,7 +87,7 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
     val consumerController =
       spawn(
         Behaviors.intercept(() => RandomFlakyNetwork[ConsumerController.Command[TestConsumer.Job]](rnd, consumerDrop))(
-          ConsumerController[TestConsumer.Job](resendLost, serviceKey = None)),
+          ConsumerController[TestConsumer.Job](serviceKey = None, consumerControllerSettings)),
         s"consumerController-${idCount}")
     spawn(
       TestConsumer(consumerDelay, numberOfMessages, consumerEndProbe.ref, consumerController),
@@ -191,3 +193,5 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
   }
 
 }
+
+// FIXME test failure: https://jenkins.akka.io:8498/job/pr-validator-per-commit-jenkins/18937/consoleText

@@ -4,8 +4,6 @@
 
 package akka.actor.typed.delivery.internal
 
-import scala.concurrent.duration._
-
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController
@@ -62,7 +60,6 @@ import akka.annotation.InternalApi
 @InternalApi private[akka] object ConsumerControllerImpl {
   import ConsumerController.Command
   import ConsumerController.RegisterToProducerController
-  import ConsumerController.RequestWindow
   import ConsumerController.SeqNr
   import ConsumerController.SequencedMessage
   import ConsumerController.Start
@@ -98,9 +95,11 @@ import akka.annotation.InternalApi
     }
   }
 
-  def apply[A](resendLost: Boolean, serviceKey: Option[ServiceKey[Command[A]]]): Behavior[Command[A]] = {
+  def apply[A](
+      serviceKey: Option[ServiceKey[Command[A]]],
+      settings: ConsumerController.Settings): Behavior[Command[A]] = {
     Behaviors
-      .withStash[InternalCommand](RequestWindow) { stashBuffer =>
+      .withStash[InternalCommand](settings.flowControlWindow) { stashBuffer =>
         Behaviors.setup { context =>
           context.setLoggerName("akka.actor.typed.delivery.ConsumerController")
           serviceKey.foreach { key =>
@@ -118,7 +117,7 @@ import akka.annotation.InternalApi
                   context.watchWith(s.deliverTo, ConsumerTerminated(s.deliverTo))
 
                   val activeBehavior =
-                    new ConsumerControllerImpl[A](context, timers, stashBuffer, resendLost)
+                    new ConsumerControllerImpl[A](context, timers, stashBuffer, settings)
                       .active(initialState(context, s))
                   context.log.info("Received Start, unstash [{}]", stashBuffer.size)
                   stashBuffer.unstashAll(activeBehavior)
@@ -142,7 +141,7 @@ import akka.annotation.InternalApi
 
             }
 
-            timers.startTimerWithFixedDelay(Retry, Retry, 1.second) // FIXME config interval
+            timers.startTimerWithFixedDelay(Retry, Retry, settings.resendInterval)
             waitForStart(None)
           }
         }
@@ -165,12 +164,11 @@ private class ConsumerControllerImpl[A](
     context: ActorContext[ConsumerControllerImpl.InternalCommand],
     timers: TimerScheduler[ConsumerControllerImpl.InternalCommand],
     stashBuffer: StashBuffer[ConsumerControllerImpl.InternalCommand],
-    resendLost: Boolean) {
+    settings: ConsumerController.Settings) {
 
   import ConsumerController.Confirmed
   import ConsumerController.Delivery
   import ConsumerController.RegisterToProducerController
-  import ConsumerController.RequestWindow
   import ConsumerController.SeqNr
   import ConsumerController.SequencedMessage
   import ConsumerController.Start
@@ -178,8 +176,11 @@ private class ConsumerControllerImpl[A](
   import ProducerControllerImpl.Ack
   import ProducerControllerImpl.Request
   import ProducerControllerImpl.Resend
+  import settings.flowControlWindow
 
   startRetryTimer()
+
+  private def resendLost = !settings.onlyFlowControl
 
   // Expecting a SequencedMessage from ProducerController, that will be delivered to the consumer if
   // the seqNr is right.
@@ -250,7 +251,7 @@ private class ConsumerControllerImpl[A](
         seqMsg.producer,
         seqNr)
 
-      val newRequestedSeqNr = seqMsg.seqNr - 1 + RequestWindow
+      val newRequestedSeqNr = seqMsg.seqNr - 1 + flowControlWindow
       context.log.info("Request first [{}]", newRequestedSeqNr)
       seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
 
@@ -351,12 +352,12 @@ private class ConsumerControllerImpl[A](
         val newRequestedSeqNr =
           if (seqMsg.first) {
             // confirm the first message immediately to cancel resending of first
-            val newRequestedSeqNr = seqNr - 1 + RequestWindow
+            val newRequestedSeqNr = seqNr - 1 + flowControlWindow
             context.log.info("Request after first [{}]", newRequestedSeqNr)
             s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
             newRequestedSeqNr
-          } else if ((s.requestedSeqNr - seqNr) == RequestWindow / 2) {
-            val newRequestedSeqNr = s.requestedSeqNr + RequestWindow / 2
+          } else if ((s.requestedSeqNr - seqNr) == flowControlWindow / 2) {
+            val newRequestedSeqNr = s.requestedSeqNr + flowControlWindow / 2
             context.log.info("Request [{}]", newRequestedSeqNr)
             s.producer ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
             startRetryTimer() // reset interval since Request was just sent
@@ -451,12 +452,12 @@ private class ConsumerControllerImpl[A](
   }
 
   private def startRetryTimer(): Unit = {
-    timers.startTimerWithFixedDelay(Retry, Retry, 1.second) // FIXME config interval
+    timers.startTimerWithFixedDelay(Retry, Retry, settings.resendInterval)
   }
 
   // in case the Request or the SequencedMessage triggering the Request is lost
   private def retryRequest(s: State[A]): State[A] = {
-    val newRequestedSeqNr = if (resendLost) s.requestedSeqNr else s.receivedSeqNr + RequestWindow / 2
+    val newRequestedSeqNr = if (resendLost) s.requestedSeqNr else s.receivedSeqNr + flowControlWindow / 2
     context.log.info("retry Request [{}]", newRequestedSeqNr)
     // FIXME may watch the producer to avoid sending retry Request to dead producer
     s.producer ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
