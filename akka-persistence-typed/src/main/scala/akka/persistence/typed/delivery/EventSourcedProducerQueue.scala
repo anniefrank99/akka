@@ -4,8 +4,12 @@
 
 package akka.persistence.typed.delivery
 
+import java.time.{ Duration => JavaDuration }
+
 import scala.concurrent.duration._
 
+import akka.util.JavaDurationConverters._
+import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.SupervisorStrategy
 import akka.actor.typed.delivery.DurableProducerQueue
@@ -15,6 +19,7 @@ import akka.persistence.typed.PersistenceId
 import akka.persistence.typed.scaladsl.Effect
 import akka.persistence.typed.scaladsl.EventSourcedBehavior
 import akka.persistence.typed.scaladsl.RetentionCriteria
+import com.typesafe.config.Config
 
 /**
  * [[DurableProducerQueue]] that can be used with [[akka.actor.typed.delivery.ProducerController]]
@@ -27,22 +32,128 @@ import akka.persistence.typed.scaladsl.RetentionCriteria
 object EventSourcedProducerQueue {
   import DurableProducerQueue._
 
+  object Settings {
+
+    /**
+     * Scala API: Factory method from config `akka.reliable-delivery.producer-controller.event-sourced-durable-queue`
+     * of the `ActorSystem`.
+     */
+    def apply(system: ActorSystem[_]): Settings =
+      apply(system.settings.config.getConfig("akka.reliable-delivery.producer-controller.event-sourced-durable-queue"))
+
+    /**
+     * Scala API: Factory method from Config corresponding to
+     * `akka.reliable-delivery.producer-controller.event-sourced-durable-queue`.
+     */
+    def apply(config: Config): Settings = {
+      new Settings(
+        restartMaxBackoff = config.getDuration("restart-max-backoff").asScala,
+        snapshotEvery = config.getInt("snapshot-every"),
+        keepNSnapshots = config.getInt("keep-n-snapshots"),
+        deleteEvents = config.getBoolean("delete-events"))
+    }
+
+    /**
+     * Java API: Factory method from config `akka.reliable-delivery.producer-controller.event-sourced-durable-queue`
+     * of the `ActorSystem`.
+     */
+    def create(system: ActorSystem[_]): Settings =
+      apply(system)
+
+    /**
+     * java API: Factory method from Config corresponding to
+     * `akka.reliable-delivery.producer-controller.event-sourced-durable-queue`.
+     */
+    def create(config: Config): Settings =
+      apply(config)
+  }
+
+  final class Settings private (
+      val restartMaxBackoff: FiniteDuration,
+      val snapshotEvery: Int,
+      val keepNSnapshots: Int,
+      val deleteEvents: Boolean) {
+
+    def withSnapshotEvery(newSnapshotEvery: Int): Settings =
+      copy(snapshotEvery = newSnapshotEvery)
+
+    def withKeepNSnapshots(newKeepNSnapshots: Int): Settings =
+      copy(keepNSnapshots = newKeepNSnapshots)
+
+    def withDeleteEvents(newDeleteEvents: Boolean): Settings =
+      copy(deleteEvents = newDeleteEvents)
+
+    /**
+     * Scala API
+     */
+    def withRestartMaxBackoff(newRestartMaxBackoff: FiniteDuration): Settings =
+      copy(restartMaxBackoff = newRestartMaxBackoff)
+
+    /**
+     * Java API
+     */
+    def withRestartMaxBackoff(newRestartMaxBackoff: JavaDuration): Settings =
+      copy(restartMaxBackoff = newRestartMaxBackoff.asScala)
+
+    /**
+     * Java API
+     */
+    def getRestartMaxBackoff(): JavaDuration =
+      restartMaxBackoff.asJava
+
+    /**
+     * Private copy method for internal use only.
+     */
+    private def copy(
+        restartMaxBackoff: FiniteDuration = restartMaxBackoff,
+        snapshotEvery: Int = snapshotEvery,
+        keepNSnapshots: Int = keepNSnapshots,
+        deleteEvents: Boolean = deleteEvents) =
+      new Settings(restartMaxBackoff, snapshotEvery, keepNSnapshots, deleteEvents)
+
+    override def toString: String =
+      s"Settings($restartMaxBackoff, $snapshotEvery, $keepNSnapshots, $deleteEvents)"
+  }
+
   def apply[A](persistenceId: PersistenceId): Behavior[DurableProducerQueue.Command[A]] = {
+    Behaviors.setup { context =>
+      apply(persistenceId, Settings(context.system))
+    }
+  }
+
+  def apply[A](persistenceId: PersistenceId, settings: Settings): Behavior[DurableProducerQueue.Command[A]] = {
     Behaviors.setup { context =>
       context.setLoggerName(classOf[EventSourcedProducerQueue[A]])
       val impl = new EventSourcedProducerQueue[A](context)
+
+      val retentionCriteria = RetentionCriteria.snapshotEvery(
+        numberOfEvents = settings.snapshotEvery,
+        keepNSnapshots = settings.keepNSnapshots)
+      val retentionCriteria2 =
+        if (settings.deleteEvents) retentionCriteria.withDeleteEventsOnSnapshot else retentionCriteria
+
       EventSourcedBehavior[Command[A], Event, State[A]](
         persistenceId,
         State.empty,
         (state, command) => impl.onCommand(state, command),
         (state, event) => impl.onEvent(state, event))
-      // FIXME config snapshot numberOfEvents
-        .withRetention(
-          RetentionCriteria.snapshotEvery(numberOfEvents = 1000, keepNSnapshots = 2).withDeleteEventsOnSnapshot)
-        // FIXME config of backoff
-        .onPersistFailure(SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.1))
+        .withRetention(retentionCriteria2)
+        .onPersistFailure(SupervisorStrategy
+          .restartWithBackoff(1.second.min(settings.restartMaxBackoff), settings.restartMaxBackoff, 0.1))
     }
   }
+
+  /**
+   * Java API
+   */
+  def create[A](persistenceId: PersistenceId): Behavior[DurableProducerQueue.Command[A]] =
+    apply(persistenceId)
+
+  /**
+   * Java API
+   */
+  def create[A](persistenceId: PersistenceId, settings: Settings): Behavior[DurableProducerQueue.Command[A]] =
+    apply(persistenceId, settings)
 
 }
 
