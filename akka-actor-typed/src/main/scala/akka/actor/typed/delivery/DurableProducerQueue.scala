@@ -26,7 +26,7 @@ object DurableProducerQueue {
   sealed trait Command[A]
 
   /**
-   * Request that is used at startup to retrieve the unconfirmed messages and current sequence number..
+   * Request that is used at startup to retrieve the unconfirmed messages and current sequence number.
    */
   final case class LoadState[A](replyTo: ActorRef[State[A]]) extends Command[A]
 

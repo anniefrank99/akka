@@ -20,6 +20,56 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
 
+/**
+ * Point-to-point reliable delivery between a producer actor sending messages and a consumer
+ * actor receiving the messages. Used together with [[ConsumerController]].
+ *
+ * The producer actor will start the flow by sending a [[ProducerController.Start]] message to
+ * the `ProducerController`. The `ActorRef` in the `Start` message is typically constructed
+ * as a message adapter to map the [[ProducerController.RequestNext]] to the protocol of the
+ * producer actor.
+ *
+ * For the `ProducerController` to know where to send the messages it must be connected with the
+ * `ConsumerController`. You do this is with [[ProducerController.RegisterConsumer]] or
+ * [[ConsumerController.RegisterToProducerController]] messages.
+ *
+ * The `ProducerController` sends `RequestNext` to the producer, which is then allowed to send one
+ * message to the `ProducerController` via the `sendNextTo` in the `RequestNext`. Thereafter the
+ * producer will receive a new `RequestNext` when it's allowed to send one more message.
+ *
+ * The producer and `ProducerController` actors are supposed to be local so that these messages are
+ * fast and not lost.
+ *
+ * Many unconfirmed messages can be in flight between the `ProducerController` and `ConsumerController`.
+ * The flow control is driven by the consumer side, which means that the `ProducerController` will
+ * not send faster than the demand requested by the `ConsumerController`.
+ *
+ * Lost messages are detected, resent and deduplicated if needed. This is also driven by the consumer side,
+ * which means that the `ProducerController` will not push resends unless requested by the
+ * `ConsumerController`.
+ *
+ * Until sent messages have been confirmed the `ProducerController` keeps them in memory to be able to
+ * resend them. If the JVM of the `ProducerController` crashes those unconfirmed messages are lost.
+ * To make sure the messages can be delivered also in that scenario the `ProducerController` can be
+ * used with a [[DurableProducerQueue]]. Then the unconfirmed messages are stored in a durable way so
+ * that they can be redelivered when the producer is started again. An implementation of the
+ * `DurableProducerQueue` is provided in `EventSourcedProducerQueue` in `akka-persistence-typed`.
+ *
+ * Instead of using `tell` with the `sendNextTo` in the `RequestNext` the producer can use `context.ask`
+ * with the `askNextTo` in the `RequestNext`. The difference is that a reply is sent back when the
+ * message has been handled. If a `DurableProducerQueue` is used then the reply is sent when the message
+ * has been stored successfully, but it might not have been processed by the consumer yet. Otherwise the
+ * reply is sent after the consumer has processed and confirmed the message.
+ *
+ * If the consumer crashes a new `ConsumerController` can be connected to the original `ProducerConsumer`
+ * without restarting it. The `ProducerConsumer` will then redeliver all unconfirmed messages.
+ *
+ * It's also possible to use the `ProducerController` and `ConsumerController` without resending
+ * lost messages, but the flow control is still used. This can be more efficient since messages
+ * don't have to be kept in memory in the `ProducerController` until they have been
+ * confirmed, but the drawback is that lost messages will not be delivered. See configuration
+ * `only-flow-control` of the `ConsumerController`.
+ */
 object ProducerController {
   import ProducerControllerImpl.UnsealedInternalCommand
 
@@ -27,8 +77,20 @@ object ProducerController {
 
   sealed trait Command[A] extends UnsealedInternalCommand
 
+  /**
+   * Initial message from the producer actor. The `producer` is typically constructed
+   * as a message adapter to map the [[RequestNext]] to the protocol of the producer actor.
+   *
+   * If the producer is restarted it should send a new `Start` message to the
+   * `ProducerController`.
+   */
   final case class Start[A](producer: ActorRef[RequestNext[A]]) extends Command[A]
 
+  /**
+   * The `ProducerController` sends `RequestNext` to the producer when it is allowed to send one
+   * message via the `sendNextTo` or `askNextTo`. Note that only one message is allowed, and then
+   * it must wait for next `RequestNext` before sending one more message.
+   */
   final case class RequestNext[A](
       producerId: String,
       currentSeqNr: SeqNr,
@@ -36,6 +98,25 @@ object ProducerController {
       sendNextTo: ActorRef[A],
       askNextTo: ActorRef[MessageWithConfirmation[A]])
 
+  /**
+   * For sending confirmation message back to the producer when the message has been confirmed.
+   * Typically used with `context.ask` from the producer.
+   *
+   * If `DurableProducerQueue` is used the confirmation reply is sent when the message has been
+   * successfully stored, meaning that the actual delivery to the consumer may happen later.
+   * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
+   * fully delivered, processed, and confirmed by the consumer.
+   */
+  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[SeqNr]) extends UnsealedInternalCommand
+
+  /**
+   * Register the given `consumerController` to the `ProducerController`.
+   *
+   * Alternatively, this registration can be done on the consumer side with the
+   * [[ConsumerController.RegisterToProducerController]] message.
+   *
+   * When using a custom `send` function for the `ProducerController` this should not be used.
+   */
   final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
 
   object Settings {
@@ -107,17 +188,6 @@ object ProducerController {
       s"Settings($durableQueueRequestTimeout, $durableQueueRetryAttempts)"
   }
 
-  /**
-   * For sending confirmation message back to the producer when the message has been confirmed.
-   * Typically used with `ask` from the producer.
-   *
-   * If `DurableProducerQueue` is used the confirmation reply is sent when the message has been
-   * successfully stored, meaning that the actual delivery to the consumer may happen later.
-   * If `DurableProducerQueue` is not used the confirmation reply is sent when the message has been
-   * fully delivered, processed, and confirmed by the consumer.
-   */
-  final case class MessageWithConfirmation[A](message: A, replyTo: ActorRef[SeqNr]) extends UnsealedInternalCommand
-
   def apply[A: ClassTag](
       producerId: String,
       durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]]): Behavior[Command[A]] = {
@@ -136,6 +206,8 @@ object ProducerController {
   /**
    * For custom `send` function. For example used with Sharding where the message must be wrapped in
    * `ShardingEnvelope(SequencedMessage(msg))`.
+   *
+   * When this factory is used the [[RegisterConsumer]] is not needed.
    */
   def apply[A: ClassTag](
       producerId: String,

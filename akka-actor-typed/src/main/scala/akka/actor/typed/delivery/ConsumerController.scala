@@ -19,6 +19,24 @@ import akka.annotation.InternalApi
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
 
+/**
+ * `ConsumerController` and [[ProducerController]] or [[WorkPullingProducerController]] are used
+ * together. See the descriptions in those classes or the Akka reference documentation for
+ * how they are intended to be used.
+ *
+ * The destination consumer actor will start the flow by sending an initial [[ConsumerController.Start]]
+ * message to the `ConsumerController`. The `ActorRef` in the `Start` message is typically constructed
+ * as a message adapter to map the [[ConsumerController.Delivery]] to the protocol of the consumer actor.
+ *
+ * Received messages from the producer are wrapped in [[ConsumerController.Delivery]] when sent to the consumer,
+ * which is supposed to reply with [[ConsumerController.Confirmed]] when it has processed the message.
+ * Next message is not delivered until the previous is confirmed.
+ * More messages from the producer that arrive while waiting for the confirmation are stashed by
+ * the `ConsumerController` and delivered when previous message was confirmed.
+ *
+ * The consumer and the `ConsumerController` actors are supposed to be local so that these messages are fast
+ * and not lost.
+ */
 object ConsumerController {
   import ConsumerControllerImpl.UnsealedInternalCommand
 
@@ -26,16 +44,49 @@ object ConsumerController {
 
   sealed trait Command[+A] extends UnsealedInternalCommand
 
+  /**
+   * Initial message from the consumer actor. The `deliverTo` is typically constructed
+   * as a message adapter to map the [[Delivery]] to the protocol of the consumer actor.
+   *
+   * If the producer is restarted it should send a new `Start` message to the
+   * `ConsumerController`.
+   */
+  final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
+
+  /**
+   * Received messages from the producer are wrapped in `Delivery` when sent to the consumer.
+   * When the message has been processed the consumer is supposed to send [[Confirmed]] back
+   * to the `ConsumerController` via the `confirmTo`.
+   */
+  final case class Delivery[A](producerId: String, seqNr: SeqNr, msg: A, confirmTo: ActorRef[Confirmed])
+
+  /**
+   * When the message has been processed the consumer is supposed to send `Confirmed` back
+   * to the `ConsumerController` via the `confirmTo` in the [[Delivery]] message.
+   *
+   * The `seqNr` must correspond to the `seqNr` in the [[Delivery]].
+   */
+  final case class Confirmed(seqNr: SeqNr) extends UnsealedInternalCommand
+
+  /**
+   * Register the `ConsumerController` to the given `producerController`. It will
+   * retry the registration until the `ProducerConsumer` has acknowledged by sending its
+   * first message.
+   *
+   * Alternatively, this registration can be done on the producer side with the
+   * [[ProducerController.RegisterConsumer]] message.
+   */
+  final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
+      extends Command[A]
+
+  /**
+   * This is used between the `ProducerController` and `ConsumerController`. Should rarely be used in
+   * application code but is public because it's possible to wrap it or send it in other ways when
+   * building higher level abstractions that are using the `ProducerController`.
+   */
   final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, msg: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerControllerImpl.InternalCommand])
-      extends Command[A]
-
-  final case class Delivery[A](producerId: String, seqNr: SeqNr, msg: A, confirmTo: ActorRef[Confirmed])
-  final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
-  final case class Confirmed(seqNr: SeqNr) extends UnsealedInternalCommand
-
-  final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
       extends Command[A]
 
   object Settings {

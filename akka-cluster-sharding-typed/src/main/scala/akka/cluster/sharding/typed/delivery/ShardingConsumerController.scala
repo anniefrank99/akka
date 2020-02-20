@@ -4,6 +4,8 @@
 
 package akka.cluster.sharding.typed.delivery
 
+import java.util.function.{ Function => JFunction }
+
 import akka.actor.typed.ActorRef
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
@@ -12,6 +14,26 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.cluster.sharding.typed.delivery.internal.ShardingConsumerControllerImpl
 import com.typesafe.config.Config
 
+/**
+ * `ShardingConsumerController` is used together with [[ShardingProducerController]]. See the description
+ * in that class or the Akka reference documentation for how they are intended to be used.
+ *
+ * `ShardingConsumerController` is the entity that is initialized in `ClusterSharding`. It will manage
+ * the lifecycle and message delivery to the destination consumer actor.
+ *
+ * The destination consumer actor will start the flow by sending an initial [[ConsumerController.Start]]
+ * message via the `ActorRef` provided in the factory function of the consumer `Behavior`.
+ * The `ActorRef` in the `Start` message is typically constructed as a message adapter to map the
+ * [[ConsumerController.Delivery]] to the protocol of the consumer actor.
+ *
+ * Received messages from the producer are wrapped in [[ConsumerController.Delivery]] when sent to the consumer,
+ * which is supposed to reply with [[ConsumerController.Confirmed]] when it has processed the message.
+ * Next message from a specific producer is not delivered until the previous is confirmed. However, since
+ * there can be several producers, e.g. one per node, sending to the same destination entity there can be
+ * several `Delivery` in flight at the same time.
+ * More messages from a specific producer that arrive while waiting for the confirmation are stashed by
+ * the `ConsumerController` and delivered when previous message was confirmed.
+ */
 object ShardingConsumerController {
 
   object Settings {
@@ -66,6 +88,10 @@ object ShardingConsumerController {
       s"Settings($bufferSize,$consumerControllerSettings)"
   }
 
+  /**
+   * The `Behavior` of the entity that is to be initialized in `ClusterSharding`. It will manage
+   * the lifecycle and message delivery to the destination consumer actor.
+   */
   def apply[A, B](consumerBehavior: ActorRef[ConsumerController.Start[A]] => Behavior[B])
       : Behavior[ConsumerController.SequencedMessage[A]] = {
     Behaviors.setup { context =>
@@ -73,12 +99,31 @@ object ShardingConsumerController {
     }
   }
 
-  // can't overload apply, loosing type inference
+  /**
+   * The `Behavior` of the entity that is to be initialized in `ClusterSharding`. It will manage
+   * the lifecycle and message delivery to the destination consumer actor.
+   */
   def withSettings[A, B](settings: Settings)(consumerBehavior: ActorRef[ConsumerController.Start[A]] => Behavior[B])
       : Behavior[ConsumerController.SequencedMessage[A]] = {
+    // can't overload apply, loosing type inference
     ShardingConsumerControllerImpl(consumerBehavior, settings)
   }
 
-  // FIXME javadsl create
+  /**
+   * Java API: The `Behavior` of the entity that is to be initialized in `ClusterSharding`. It will manage
+   * the lifecycle and message delivery to the destination consumer actor.
+   */
+  def create[A, B](consumerBehavior: JFunction[ActorRef[ConsumerController.Start[A]], Behavior[B]])
+      : Behavior[ConsumerController.SequencedMessage[A]] =
+    apply(consumerBehavior.apply)
+
+  /**
+   * Java API: The `Behavior` of the entity that is to be initialized in `ClusterSharding`. It will manage
+   * the lifecycle and message delivery to the destination consumer actor.
+   */
+  def create[A, B](
+      consumerBehavior: JFunction[ActorRef[ConsumerController.Start[A]], Behavior[B]],
+      settings: Settings): Behavior[ConsumerController.SequencedMessage[A]] =
+    withSettings(settings)(consumerBehavior.apply)
 
 }
