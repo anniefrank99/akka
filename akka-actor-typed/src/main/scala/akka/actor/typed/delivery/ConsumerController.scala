@@ -91,6 +91,8 @@ object ConsumerController {
       @InternalApi private[akka] val producer: ActorRef[ProducerControllerImpl.InternalCommand])
       extends Command[A]
 
+  // FIXME can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.
+
   object Settings {
 
     /**

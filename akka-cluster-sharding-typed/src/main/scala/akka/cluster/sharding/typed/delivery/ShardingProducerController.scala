@@ -23,8 +23,8 @@ import akka.cluster.sharding.typed.delivery.internal.ShardingProducerControllerI
 import com.typesafe.config.Config
 
 /**
- * Reliable delivery between a producer actor sending messages to a sharded consumer
- * actor receiving the messages.
+ * Reliable delivery between a producer actor sending messages to sharded consumer
+ * actors receiving the messages.
  *
  * The `ShardingProducerController` should be used together with [[ShardingConsumerController]].
  *
@@ -65,7 +65,7 @@ import com.typesafe.config.Config
  * To make sure the messages can be delivered also in that scenario the `ShardingProducerController` can be
  * used with a [[DurableProducerQueue]]. Then the unconfirmed messages are stored in a durable way so
  * that they can be redelivered when the producer is started again. An implementation of the
- * `DurableProducerQueue` is provided in `EventSourcedProducerQueue` in `akka-persistence-typed`.
+ * `DurableProducerQueue` is provided by `EventSourcedProducerQueue` in `akka-persistence-typed`.
  *
  * Instead of using `tell` with the `sendNextTo` in the `RequestNext` the producer can use `context.ask`
  * with the `askNextTo` in the `RequestNext`. The difference is that a reply is sent back when the

@@ -70,7 +70,7 @@ import com.typesafe.config.Config
  * To make sure the messages can be delivered also in that scenario the `WorkPullingProducerController` can be
  * used with a [[DurableProducerQueue]]. Then the unconfirmed messages are stored in a durable way so
  * that they can be redelivered when the producer is started again. An implementation of the
- * `DurableProducerQueue` is provided in `EventSourcedProducerQueue` in `akka-persistence-typed`.
+ * `DurableProducerQueue` is provided by `EventSourcedProducerQueue` in `akka-persistence-typed`.
  *
  * Instead of using `tell` with the `sendNextTo` in the `RequestNext` the producer can use `context.ask`
  * with the `askNextTo` in the `RequestNext`. The difference is that a reply is sent back when the
@@ -79,7 +79,8 @@ import com.typesafe.config.Config
  * reply is sent after the consumer has processed and confirmed the message.
  *
  * It's also possible to use the `WorkPullingProducerController` and `ConsumerController` without resending
- * lost messages, but the flow control is still used. This can be more efficient since messages
+ * lost messages, but the flow control is still used. This can for example be useful when both consumer and
+ * producer are know to be located in the same local `ActorSystem`. This can be more efficient since messages
  * don't have to be kept in memory in the `ProducerController` until they have been
  * confirmed, but the drawback is that lost messages will not be delivered. See configuration
  * `only-flow-control` of the `ConsumerController`.

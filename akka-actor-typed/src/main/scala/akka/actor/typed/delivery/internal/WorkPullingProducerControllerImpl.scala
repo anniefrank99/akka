@@ -620,3 +620,6 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
     }
   }
 }
+
+// FIXME Maybe there is a case where this producer has to notice that the ShardingConsumerController terminated
+// and resend unconfirmed to wake up the ShardingConsumerController again at a new place.

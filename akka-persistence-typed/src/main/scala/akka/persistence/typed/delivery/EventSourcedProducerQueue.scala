@@ -76,6 +76,8 @@ object EventSourcedProducerQueue {
       val keepNSnapshots: Int,
       val deleteEvents: Boolean) {
 
+    // FIXME add journal and snapshot plugin config
+
     def withSnapshotEvery(newSnapshotEvery: Int): Settings =
       copy(snapshotEvery = newSnapshotEvery)
 
