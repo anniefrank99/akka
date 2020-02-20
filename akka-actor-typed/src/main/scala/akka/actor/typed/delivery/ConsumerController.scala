@@ -15,6 +15,7 @@ import akka.actor.typed.delivery.internal.ConsumerControllerImpl
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import akka.annotation.InternalApi
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
@@ -37,6 +38,7 @@ import com.typesafe.config.Config
  * The consumer and the `ConsumerController` actors are supposed to be local so that these messages are fast
  * and not lost.
  */
+@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object ConsumerController {
   import ConsumerControllerImpl.UnsealedInternalCommand
 

@@ -5,7 +5,9 @@
 package akka.actor.typed.delivery
 
 import scala.collection.immutable
+
 import akka.actor.typed.ActorRef
+import akka.annotation.ApiMayChange
 import akka.annotation.InternalApi
 
 /**
@@ -15,6 +17,7 @@ import akka.annotation.InternalApi
  *
  * An implementation of this exists in `akka.persistence.typed.delivery.EventSourcedProducerQueue`.
  */
+@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object DurableProducerQueue {
 
   type SeqNr = Long

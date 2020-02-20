@@ -17,6 +17,7 @@ import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.DurableProducerQueue
 import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import akka.cluster.sharding.typed.ShardingEnvelope
 import akka.cluster.sharding.typed.delivery.internal.ShardingProducerControllerImpl
 import com.typesafe.config.Config
@@ -78,6 +79,7 @@ import com.typesafe.config.Config
  * confirmed, but the drawback is that lost messages will not be delivered. See configuration
  * `only-flow-control` of the `ShardingConsumerController`.
  */
+@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object ShardingProducerController {
 
   import ShardingProducerControllerImpl.UnsealedInternalCommand

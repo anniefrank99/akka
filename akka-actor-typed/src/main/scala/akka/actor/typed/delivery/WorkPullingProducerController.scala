@@ -7,8 +7,8 @@ package akka.actor.typed.delivery
 import java.util.Optional
 
 import scala.reflect.ClassTag
-
 import scala.compat.java8.OptionConverters._
+
 import akka.Done
 import akka.actor.typed.ActorRef
 import akka.actor.typed.ActorSystem
@@ -16,6 +16,7 @@ import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.internal.WorkPullingProducerControllerImpl
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import com.typesafe.config.Config
 
 /**
@@ -83,6 +84,7 @@ import com.typesafe.config.Config
  * confirmed, but the drawback is that lost messages will not be delivered. See configuration
  * `only-flow-control` of the `ConsumerController`.
  */
+@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object WorkPullingProducerController {
 
   import WorkPullingProducerControllerImpl.UnsealedInternalCommand

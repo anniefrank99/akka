@@ -11,6 +11,7 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import akka.cluster.sharding.typed.delivery.internal.ShardingConsumerControllerImpl
 import com.typesafe.config.Config
 
@@ -34,6 +35,7 @@ import com.typesafe.config.Config
  * More messages from a specific producer that arrive while waiting for the confirmation are stashed by
  * the `ConsumerController` and delivered when previous message was confirmed.
  */
+@ApiMayChange
 object ShardingConsumerController {
 
   object Settings {

@@ -15,6 +15,7 @@ import akka.actor.typed.SupervisorStrategy
 import akka.actor.typed.delivery.DurableProducerQueue
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import akka.persistence.typed.PersistenceId
 import akka.persistence.typed.scaladsl.Effect
 import akka.persistence.typed.scaladsl.EventSourcedBehavior
@@ -29,6 +30,7 @@ import com.typesafe.config.Config
  *
  * The [[DurableProducerQueue.LoadState]] request is used at startup to retrieve the unconfirmed messages.
  */
+@ApiMayChange
 object EventSourcedProducerQueue {
   import DurableProducerQueue._
 

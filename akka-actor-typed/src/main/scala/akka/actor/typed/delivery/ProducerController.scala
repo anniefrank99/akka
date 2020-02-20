@@ -17,6 +17,7 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.Behaviors
+import akka.annotation.ApiMayChange
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
 
@@ -70,6 +71,7 @@ import com.typesafe.config.Config
  * confirmed, but the drawback is that lost messages will not be delivered. See configuration
  * `only-flow-control` of the `ConsumerController`.
  */
+@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object ProducerController {
   import ProducerControllerImpl.UnsealedInternalCommand
 
