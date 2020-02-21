@@ -99,7 +99,7 @@ FIXME example
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
-### Delivery semantics
+### Point-to-point delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order
 as they were sent without loss or duplicates. Meaning effectively once processing without any business level
@@ -173,12 +173,22 @@ Many unconfirmed messages can be in flight between the `WorkPullingProducerContr
 consumer side, which means that the `WorkPullingProducerController` will not send faster than the
 demand requested by the workers.
 
-FIXME example
+Example of image converter worker (consumer):
+
+Scala
+:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #imports #consumer }
+
+and image converter job manager (producer):
+
+Scala
+:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #imports #producer }
+
+FIXME Java example
 
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
-### Delivery semantics
+### Work pulling delivery semantics
 
 For work pulling the order of the messages should not matter, because each message is routed randomly
 to one of the workers with demand.
@@ -247,7 +257,7 @@ FIXME example
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
-### Delivery semantics
+### Sharding delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order
 as they were sent without loss or duplicates. Meaning effectively once processing without any business level
@@ -283,7 +293,13 @@ When using the `EventSourcedProducerQueue` the following dependency is needed:
 You also have to select journal plugin and snapshot store plugin, see 
 @ref:[Persistence Plugins](../persistence-plugins.md).
 
-FIXME example
+Example of the image converter work manager from the @ref:[Work pulling section](#work-pulling) with
+`EventSourcedProducerQueue` enabled:
+ 
+Scala
+:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #durable-queue }
+
+FIXME Java example
 
 It's important to note that the `EventSourcedProducerQueue` requires a @ref:[PersistenceId](persistence.md#persistenceid),
 which must be unique. The same `PersistenceId` must not be used for different producers at the same time.
@@ -302,7 +318,12 @@ message has been handled. To include the `replyTo` `ActorRef` the message must b
 has been stored successfully, but it might not have been processed by the consumer yet. Otherwise the
 reply is sent after the consumer has processed and confirmed the message.
 
-FIXME example
+Example of using `ask` in the image converter work manager from the @ref:[Work pulling section](#work-pulling):
+ 
+Scala
+:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #ask }
+
+FIXME Java example
 
 ## Only flow control
 
