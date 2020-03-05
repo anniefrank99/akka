@@ -233,4 +233,6 @@ object ShardingProducerController {
       settings: Settings): Behavior[Command[A]] = {
     apply(producerId, region, durableQueueBehavior.asScala, settings)(ClassTag(messageClass))
   }
+
+  // TODO maybe there is a need for variant taking message extractor instead of ShardingEnvelope
 }

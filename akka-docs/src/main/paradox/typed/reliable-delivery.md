@@ -252,11 +252,26 @@ flight between the `ShardingProducerController` and each `ShardingConsumerContro
 limited by a flow control window. The flow control is driven by the consumer side, which means that
 the `ShardingProducerController` will not send faster than the demand requested by the consumers.
 
-FIXME example
- 
+Example of `TodoList` entity (consumer):
+
+Scala
+:  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #imports #consumer }
+
+and `TodoService` (producer):
+
+Scala
+:  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #producer }
+
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
+Those are initialized with sharding like this (from the guardian):
+
+Scala
+:  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #init }
+
+FIXME Java example
+ 
 ### Sharding delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order
