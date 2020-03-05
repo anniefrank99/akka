@@ -8,6 +8,7 @@ import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.Terminated
 import akka.actor.typed.delivery.ConsumerController
+import akka.actor.typed.delivery.internal.ConsumerControllerImpl
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.InternalApi
@@ -37,6 +38,7 @@ import akka.cluster.sharding.typed.delivery.ShardingConsumerController
       Behaviors
         .receiveMessage[ConsumerController.Command[A]] {
           case start: ConsumerController.Start[A] =>
+            ConsumerControllerImpl.enforceLocalConsumer(start.deliverTo)
             stashBuffer.unstashAll(
               new ShardingConsumerControllerImpl[A](context, start.deliverTo, settings).active(Map.empty))
           case other =>

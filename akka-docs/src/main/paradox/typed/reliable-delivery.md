@@ -236,7 +236,7 @@ to send one message to the `ShardingProducerController`. Thereafter the producer
 new `RequestNext` when it's allowed to send one more message.
 
 In the @apidoc[ShardingProducerController.RequestNext] message there is information about which entities
-that have demand. It is allowed to send to new `entityId` that is not included in the `RequestNext.entitiesWithDemand`.
+that have demand. It is allowed to send to a new `entityId` that is not included in the `RequestNext.entitiesWithDemand`.
 If sending to an entity that doesn't have demand the message will be buffered. This support for buffering
 means that it is even allowed to send several messages in response to one `RequestNext` but it's recommended to
 only send one message and wait for next `RequestNext` before sending more messages.

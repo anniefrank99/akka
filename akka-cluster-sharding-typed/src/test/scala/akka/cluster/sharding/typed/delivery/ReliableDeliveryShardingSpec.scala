@@ -111,15 +111,15 @@ class ReliableDeliveryShardingSpec
           ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
             TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, c))))
 
-      val shardingController =
+      val shardingProducerController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
-      val producer = spawn(TestShardingProducer(shardingController), name = s"shardingProducer-$idCount")
+      val producer = spawn(TestShardingProducer(shardingProducerController), name = s"shardingProducer-$idCount")
 
       // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
       consumerEndProbe.receiveMessages(3, 5.seconds)
 
       testKit.stop(producer)
-      testKit.stop(shardingController)
+      testKit.stop(shardingProducerController)
     }
 
     "illustrate sharding usage with several producers" in {
@@ -176,11 +176,11 @@ class ReliableDeliveryShardingSpec
           ShardingConsumerController[TestConsumer.Job, TestConsumer.Command](c =>
             TestConsumer(defaultConsumerDelay, 3, consumerEndProbe.ref, c))))
 
-      val shardingController =
+      val shardingProducerController =
         spawn(ShardingProducerController[TestConsumer.Job](producerId, sharding, None), s"shardingController-$idCount")
 
       val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
-      shardingController ! ShardingProducerController.Start(producerProbe.ref)
+      shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
 
       val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! ShardingProducerController.MessageWithConfirmation(
@@ -213,7 +213,7 @@ class ReliableDeliveryShardingSpec
         replyProbe.ref)
       consumerEndProbe.receiveMessage() // entity-0 received 3 messages
 
-      testKit.stop(shardingController)
+      testKit.stop(shardingProducerController)
     }
 
     "include demand information in RequestNext" in {
@@ -238,7 +238,7 @@ class ReliableDeliveryShardingSpec
 
       val seq1 = shardingProbe.receiveMessage().message
       seq1.msg should ===(TestConsumer.Job("msg-1"))
-      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next2 = producerProbe.receiveMessage()
       next2.entitiesWithDemand should ===(Set("entity-1"))
@@ -246,7 +246,7 @@ class ReliableDeliveryShardingSpec
 
       next2.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
       val next3 = producerProbe.receiveMessage()
-      // could be sent immediately since had demand, and Request(upToSeqNr-5)
+      // could be sent immediately since had demand, and Request(requestUpToSeqNr-5)
       next3.entitiesWithDemand should ===(Set("entity-1"))
       next3.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
@@ -261,7 +261,7 @@ class ReliableDeliveryShardingSpec
       next5.bufferedForEntitiesWithoutDemand should ===(Map.empty)
 
       next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-5"))
-      // no more demand Request(upToSeqNr-5)
+      // no more demand Request(requestUpToSeqNr-5)
       producerProbe.expectNoMessage()
       // but we can anyway send more, which will be buffered
       next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-6"))
@@ -281,14 +281,14 @@ class ReliableDeliveryShardingSpec
       producerProbe.expectNoMessage()
       val seq7 = shardingProbe.receiveMessage().message
       seq7.msg should ===(TestConsumer.Job("msg-7"))
-      seq7.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, upToSeqNr = 5, true, false)
+      seq7.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next8 = producerProbe.receiveMessage()
       next8.entitiesWithDemand should ===(Set("entity-2"))
       next8.bufferedForEntitiesWithoutDemand should ===(Map("entity-1" -> 1))
 
       // when new demand the buffered messages will be be sent
-      seq5.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, upToSeqNr = 10, true, false)
+      seq5.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, requestUpToSeqNr = 10, true, false)
       val seq6 = shardingProbe.receiveMessage().message
       seq6.msg should ===(TestConsumer.Job("msg-6"))
 

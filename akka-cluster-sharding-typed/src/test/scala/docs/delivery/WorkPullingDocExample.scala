@@ -81,6 +81,7 @@ object WorkPullingDocExample {
 
     sealed trait ConvertResponse
     case object ConvertAccepted extends ConvertResponse
+    case object ConvertRejected extends ConvertResponse
     case object ConvertTimedOut extends ConvertResponse
 
     private final case class AskReply(originalReplyTo: ActorRef[ConvertResponse], timeout: Boolean) extends Command
@@ -123,23 +124,29 @@ object WorkPullingDocExample {
 
   }
 
-  class ImageWorkManager(
+  final class ImageWorkManager(
       context: ActorContext[ImageWorkManager.Command],
       stashBuffer: StashBuffer[ImageWorkManager.Command]) {
 
     import ImageWorkManager._
 
-    def waitForNext(): Behavior[Command] = {
+    private def waitForNext(): Behavior[Command] = {
       Behaviors.receiveMessage {
         case WrappedRequestNext(next) =>
           stashBuffer.unstashAll(active(next))
         case c: Convert =>
-          stashBuffer.stash(c)
-          Behaviors.same
+          if (stashBuffer.isFull) {
+            context.log.warn("Too many Convert requests.")
+            Behaviors.same
+          } else {
+            stashBuffer.stash(c)
+            Behaviors.same
+          }
       }
     }
 
-    def active(next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
+    private def active(
+        next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
       Behaviors.receiveMessage {
         case Convert(from, to, image) =>
           next.sendNextTo ! ImageConverter.ConversionJob(from, to, image)
@@ -156,13 +163,18 @@ object WorkPullingDocExample {
 
     implicit val askTimeout: Timeout = 3.seconds
 
-    def waitForNext2(): Behavior[Command] = {
+    private def waitForNext2(): Behavior[Command] = {
       Behaviors.receiveMessage {
         case WrappedRequestNext(next) =>
-          stashBuffer.unstashAll(active(next))
-        case c: Convert =>
-          stashBuffer.stash(c)
-          Behaviors.same
+          stashBuffer.unstashAll(active2(next))
+        case c: ConvertRequest =>
+          if (stashBuffer.isFull) {
+            c.replyTo ! ConvertRejected
+            Behaviors.same
+          } else {
+            stashBuffer.stash(c)
+            Behaviors.same
+          }
         case AskReply(originalReplyTo, timeout) =>
           val response = if (timeout) ConvertTimedOut else ConvertAccepted
           originalReplyTo ! response
@@ -170,7 +182,8 @@ object WorkPullingDocExample {
       }
     }
 
-    def active2(next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
+    private def active2(
+        next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
       Behaviors.receiveMessage {
         case ConvertRequest(from, to, image, originalReplyTo) =>
           context.ask[MessageWithConfirmation[ImageConverter.ConversionJob], Done](
@@ -179,7 +192,7 @@ object WorkPullingDocExample {
             case Success(done) => AskReply(originalReplyTo, timeout = false)
             case Failure(_)    => AskReply(originalReplyTo, timeout = true)
           }
-          waitForNext()
+          waitForNext2()
         case AskReply(originalReplyTo, timeout) =>
           val response = if (timeout) ConvertTimedOut else ConvertAccepted
           originalReplyTo ! response

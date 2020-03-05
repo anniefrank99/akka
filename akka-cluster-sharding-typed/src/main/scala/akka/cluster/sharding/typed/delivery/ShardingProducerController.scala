@@ -43,7 +43,7 @@ import com.typesafe.config.Config
  * Thereafter the producer will receive a new `RequestNext` when it's allowed to send one more message.
  *
  * In the `RequestNext` message there is information about which entities that have demand. It is allowed
- * to send to new `entityId` that is not included in the `RequestNext.entitiesWithDemand`. If sending to
+ * to send to a new `entityId` that is not included in the `RequestNext.entitiesWithDemand`. If sending to
  * an entity that doesn't have demand the message will be buffered. This support for buffering means that
  * it is even allowed to send several messages in response to one `RequestNext` but it's recommended to
  * only send one message and wait for next `RequestNext` before sending more messages.
@@ -115,7 +115,7 @@ object ShardingProducerController {
    * sending one more message.
    *
    * `entitiesWithDemand` contains information about which entities that have demand. It is allowed
-   * to send to new `entityId` that is not included in the `entitiesWithDemand`. If sending to
+   * to send to a new `entityId` that is not included in the `entitiesWithDemand`. If sending to
    * an entity that doesn't have demand the message will be buffered, and that can be seen in the
    * `bufferedForEntitiesWithoutDemand`.
    *
@@ -167,7 +167,7 @@ object ShardingProducerController {
       apply(system)
 
     /**
-     * java API: Factory method from Config corresponding to
+     * Java API: Factory method from Config corresponding to
      * `akka.reliable-delivery.sharding.producer-controller`.
      */
     def create(config: Config): Settings =

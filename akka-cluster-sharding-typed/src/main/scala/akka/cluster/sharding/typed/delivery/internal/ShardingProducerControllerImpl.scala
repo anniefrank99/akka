@@ -19,6 +19,7 @@ import akka.actor.typed.delivery.DurableProducerQueue
 import akka.actor.typed.delivery.DurableProducerQueue.ConfirmationQualifier
 import akka.actor.typed.delivery.DurableProducerQueue.SeqNr
 import akka.actor.typed.delivery.ProducerController
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.scaladsl.StashBuffer
@@ -149,6 +150,7 @@ import akka.util.Timeout
 
     Behaviors.receiveMessage {
       case start: Start[A] @unchecked =>
+        ProducerControllerImpl.enforceLocalProducer(start.producer)
         initialState match {
           case Some(s) =>
             becomeActive(start.producer, s)

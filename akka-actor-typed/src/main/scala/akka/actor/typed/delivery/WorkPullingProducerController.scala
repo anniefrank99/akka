@@ -146,7 +146,7 @@ object WorkPullingProducerController {
       apply(system)
 
     /**
-     * java API: Factory method from Config corresponding to
+     * Java API: Factory method from Config corresponding to
      * `akka.reliable-delivery.work-pulling.producer-controller`.
      */
     def create(config: Config): Settings =

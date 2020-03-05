@@ -63,7 +63,7 @@ object ShardingConsumerController {
       apply(system)
 
     /**
-     * java API: Factory method from Config corresponding to
+     * Java API: Factory method from Config corresponding to
      * `akka.reliable-delivery.sharding.consumer-controller`.
      */
     def create(config: Config): Settings =

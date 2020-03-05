@@ -81,9 +81,11 @@ object ProducerControllerImpl {
   /** For commands defined in public ProducerController */
   trait UnsealedInternalCommand extends InternalCommand
 
-  final case class Request(confirmedSeqNr: SeqNr, upToSeqNr: SeqNr, supportResend: Boolean, viaTimeout: Boolean)
+  final case class Request(confirmedSeqNr: SeqNr, requestUpToSeqNr: SeqNr, supportResend: Boolean, viaTimeout: Boolean)
       extends InternalCommand {
-    require(confirmedSeqNr <= upToSeqNr, s"confirmedSeqNr [$confirmedSeqNr] should be <= upToSeqNr [$upToSeqNr]")
+    require(
+      confirmedSeqNr <= requestUpToSeqNr,
+      s"confirmedSeqNr [$confirmedSeqNr] should be <= requestUpToSeqNr [$requestUpToSeqNr]")
   }
   final case class Resend(fromSeqNr: SeqNr) extends InternalCommand
   final case class Ack(confirmedSeqNr: SeqNr) extends InternalCommand
@@ -120,14 +122,19 @@ object ProducerControllerImpl {
       .setup[InternalCommand] { context =>
         context.setLoggerName("akka.actor.typed.delivery.ProducerController")
         val durableQueue = askLoadState(context, durableQueueBehavior, settings)
-        waitingForStart[A](context, None, None, durableQueue, settings, createInitialState(durableQueue.nonEmpty)) {
-          (producer, consumerController, loadedState) =>
-            val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
-            becomeActive(
-              producerId,
-              durableQueue,
-              settings,
-              createState(context.self, producerId, send, producer, loadedState))
+        waitingForInitialization[A](
+          context,
+          None,
+          None,
+          durableQueue,
+          settings,
+          createInitialState(durableQueue.nonEmpty)) { (producer, consumerController, loadedState) =>
+          val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
+          becomeActive(
+            producerId,
+            durableQueue,
+            settings,
+            createState(context.self, producerId, send, producer, loadedState))
         }
       }
       .narrow
@@ -147,7 +154,7 @@ object ProducerControllerImpl {
         context.setLoggerName("akka.actor.typed.delivery.ProducerController")
         val durableQueue = askLoadState(context, durableQueueBehavior, settings)
         // ConsumerController not used here
-        waitingForStart[A](
+        waitingForInitialization[A](
           context,
           None,
           consumerController = Some(context.system.deadLetters),
@@ -219,7 +226,7 @@ object ProducerControllerImpl {
       send)
   }
 
-  private def waitingForStart[A: ClassTag](
+  private def waitingForInitialization[A: ClassTag](
       context: ActorContext[InternalCommand],
       producer: Option[ActorRef[RequestNext[A]]],
       consumerController: Option[ActorRef[ConsumerController.Command[A]]],
@@ -235,20 +242,25 @@ object ProducerControllerImpl {
         (producer, initialState) match {
           case (Some(p), Some(s)) => thenBecomeActive(p, c, s)
           case (_, _) =>
-            waitingForStart(context, producer, Some(c), durableQueue, settings, initialState)(thenBecomeActive)
+            waitingForInitialization(context, producer, Some(c), durableQueue, settings, initialState)(thenBecomeActive)
         }
       case start: Start[A] @unchecked =>
         (consumerController, initialState) match {
           case (Some(c), Some(s)) => thenBecomeActive(start.producer, c, s)
           case (_, _) =>
-            waitingForStart(context, Some(start.producer), consumerController, durableQueue, settings, initialState)(
-              thenBecomeActive)
+            waitingForInitialization(
+              context,
+              Some(start.producer),
+              consumerController,
+              durableQueue,
+              settings,
+              initialState)(thenBecomeActive)
         }
       case load: LoadStateReply[A] @unchecked =>
         (producer, consumerController) match {
           case (Some(p), Some(c)) => thenBecomeActive(p, c, load.state)
           case (_, _) =>
-            waitingForStart(context, producer, consumerController, durableQueue, settings, Some(load.state))(
+            waitingForInitialization(context, producer, consumerController, durableQueue, settings, Some(load.state))(
               thenBecomeActive)
         }
       case LoadStateFailed(attempt) =>
@@ -287,6 +299,11 @@ object ProducerControllerImpl {
           .active(state.copy(requested = requested))
       }
     }
+  }
+
+  def enforceLocalProducer(ref: ActorRef[_]): Unit = {
+    if (ref.path.address.hasGlobalScope)
+      throw new IllegalArgumentException(s"Consumer [$ref] should be local.")
   }
 
 }
@@ -474,6 +491,7 @@ private class ProducerControllerImpl[A: ClassTag](
     }
 
     def receiveStart(start: Start[A]): Behavior[InternalCommand] = {
+      ProducerControllerImpl.enforceLocalProducer(start.producer)
       context.log.info("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
       if (s.requested)
         start.producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, context.self)
