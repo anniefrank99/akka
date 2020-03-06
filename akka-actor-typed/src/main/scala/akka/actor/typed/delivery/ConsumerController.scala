@@ -12,6 +12,7 @@ import akka.actor.typed.ActorRef
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.internal.ConsumerControllerImpl
+import akka.actor.typed.delivery.internal.DeliverySerializable
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.Behaviors
@@ -90,6 +91,7 @@ object ConsumerController {
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerControllerImpl.InternalCommand])
       extends Command[A]
+      with DeliverySerializable
 
   // FIXME can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.
 

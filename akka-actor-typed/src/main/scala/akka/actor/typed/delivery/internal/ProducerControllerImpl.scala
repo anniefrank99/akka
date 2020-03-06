@@ -82,13 +82,14 @@ object ProducerControllerImpl {
   trait UnsealedInternalCommand extends InternalCommand
 
   final case class Request(confirmedSeqNr: SeqNr, requestUpToSeqNr: SeqNr, supportResend: Boolean, viaTimeout: Boolean)
-      extends InternalCommand {
+      extends InternalCommand
+      with DeliverySerializable {
     require(
       confirmedSeqNr <= requestUpToSeqNr,
       s"confirmedSeqNr [$confirmedSeqNr] should be <= requestUpToSeqNr [$requestUpToSeqNr]")
   }
-  final case class Resend(fromSeqNr: SeqNr) extends InternalCommand
-  final case class Ack(confirmedSeqNr: SeqNr) extends InternalCommand
+  final case class Resend(fromSeqNr: SeqNr) extends InternalCommand with DeliverySerializable
+  final case class Ack(confirmedSeqNr: SeqNr) extends InternalCommand with DeliverySerializable
 
   private case class Msg[A](msg: A) extends InternalCommand
   private case object ResendFirst extends InternalCommand

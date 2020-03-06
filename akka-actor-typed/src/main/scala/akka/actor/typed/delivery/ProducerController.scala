@@ -15,6 +15,7 @@ import scala.reflect.ClassTag
 import akka.actor.typed.ActorRef
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
+import akka.actor.typed.delivery.internal.DeliverySerializable
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.ApiMayChange
@@ -120,7 +121,9 @@ object ProducerController {
    *
    * When using a custom `send` function for the `ProducerController` this should not be used.
    */
-  final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]]) extends Command[A]
+  final case class RegisterConsumer[A](consumerController: ActorRef[ConsumerController.Command[A]])
+      extends Command[A]
+      with DeliverySerializable
 
   object Settings {
 

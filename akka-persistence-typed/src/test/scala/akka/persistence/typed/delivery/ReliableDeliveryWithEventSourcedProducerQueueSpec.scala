@@ -18,7 +18,7 @@ object ReliableDeliveryWithEventSourcedProducerQueueSpec {
   def conf: Config =
     ConfigFactory.parseString(s"""
     akka.persistence.journal.plugin = "akka.persistence.journal.inmem"
-    akka.persistence.journal.inmem.test-serialization = off # FIXME on
+    akka.persistence.journal.inmem.test-serialization = on
     akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
     akka.persistence.snapshot-store.local.dir = "target/ProducerControllerWithEventSourcedProducerQueueSpec-${UUID
       .randomUUID()

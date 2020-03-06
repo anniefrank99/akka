@@ -10,6 +10,8 @@ import akka.actor.typed.ActorRef
 import akka.annotation.ApiMayChange
 import akka.annotation.InternalApi
 
+import akka.actor.typed.delivery.internal.DeliverySerializable
+
 /**
  * Actor message protocol for storing and confirming reliable delivery of messages. A [[akka.actor.typed.Behavior]]
  * implementation of this protocol can optionally be used with [[ProducerController]] when messages shall survive
@@ -61,11 +63,12 @@ object DurableProducerQueue {
       highestConfirmedSeqNr: SeqNr,
       confirmedSeqNr: Map[ConfirmationQualifier, SeqNr],
       unconfirmed: immutable.IndexedSeq[MessageSent[A]])
+      extends DeliverySerializable
 
   /**
    * INTERNAL API
    */
-  @InternalApi private[akka] sealed trait Event
+  @InternalApi private[akka] sealed trait Event extends DeliverySerializable
 
   /**
    * The fact (event) that a message has been sent.
