@@ -171,23 +171,23 @@ private class EventSourcedProducerQueue[A](context: ActorContext[DurableProducer
     command match {
       case StoreMessageSent(sent, replyTo) =>
         if (sent.seqNr == state.currentSeqNr) {
-          context.log.info(
+          context.log.trace(
             "StoreMessageSent seqNr [{}], confirmationQualifier [{}]",
             sent.seqNr,
             sent.confirmationQualifier)
           Effect.persist(sent).thenReply(replyTo)(_ => StoreMessageSentAck(sent.seqNr))
         } else if (sent.seqNr == state.currentSeqNr - 1) {
           // already stored, could be a retry after timout
-          context.log.info("Duplicate seqNr [{}], currentSeqNr [{}]", sent.seqNr, state.currentSeqNr)
+          context.log.debug("Duplicate seqNr [{}], currentSeqNr [{}]", sent.seqNr, state.currentSeqNr)
           Effect.reply(replyTo)(StoreMessageSentAck(sent.seqNr))
         } else {
           // may happen after failure
-          context.log.info("Ignoring unexpected seqNr [{}], currentSeqNr [{}]", sent.seqNr, state.currentSeqNr)
+          context.log.debug("Ignoring unexpected seqNr [{}], currentSeqNr [{}]", sent.seqNr, state.currentSeqNr)
           Effect.unhandled // no reply, request will timeout
         }
 
       case StoreMessageConfirmed(seqNr, confirmationQualifier) =>
-        context.log.info("StoreMessageConfirmed seqNr [{}], confirmationQualifier [{}]", seqNr, confirmationQualifier)
+        context.log.trace("StoreMessageConfirmed seqNr [{}], confirmationQualifier [{}]", seqNr, confirmationQualifier)
         if (seqNr > state.confirmedSeqNr.getOrElse(confirmationQualifier, 0L))
           Effect.persist(Confirmed(seqNr, confirmationQualifier))
         else

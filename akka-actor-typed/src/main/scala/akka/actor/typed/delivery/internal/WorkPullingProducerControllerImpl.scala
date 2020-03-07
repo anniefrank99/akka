@@ -119,21 +119,23 @@ import akka.util.Timeout
     Behaviors
       .withStash[InternalCommand](settings.bufferSize) { stashBuffer =>
         Behaviors.setup[InternalCommand] { context =>
-          context.setLoggerName("akka.actor.typed.delivery.WorkPullingProducerController")
-          val listingAdapter = context.messageAdapter[Receptionist.Listing](listing =>
-            CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
-          context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
+          Behaviors.withMdc(staticMdc = Map("producerId" -> producerId)) {
+            context.setLoggerName("akka.actor.typed.delivery.WorkPullingProducerController")
+            val listingAdapter = context.messageAdapter[Receptionist.Listing](listing =>
+              CurrentWorkers[A](listing.allServiceInstances(workerServiceKey)))
+            context.system.receptionist ! Receptionist.Subscribe(workerServiceKey, listingAdapter)
 
-          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
+            val durableQueue = askLoadState(context, durableQueueBehavior, settings)
 
-          waitingForStart(
-            producerId,
-            context,
-            stashBuffer,
-            durableQueue,
-            settings,
-            None,
-            createInitialState(durableQueue.nonEmpty))
+            waitingForStart(
+              producerId,
+              context,
+              stashBuffer,
+              durableQueue,
+              settings,
+              None,
+              createInitialState(durableQueue.nonEmpty))
+          }
         }
       }
       .narrow
@@ -200,7 +202,10 @@ import akka.util.Timeout
           context.log.error(errorMessage)
           throw new TimeoutException(errorMessage)
         } else {
-          context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+          context.log.warn(
+            "LoadState failed, attempt [{}] of [{}], retrying.",
+            attempt,
+            settings.producerControllerSettings.durableQueueRetryAttempts)
           // retry
           askLoadState(context, durableQueue, settings, attempt + 1)
           Behaviors.same
@@ -273,14 +278,15 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
     def onMessage(msg: A, wasStashed: Boolean, replyTo: Option[ActorRef[Done]], totalSeqNr: TotalSeqNr): State[A] = {
       val consumersWithDemand = s.out.iterator.filter { case (_, out) => out.askNextTo.isDefined }.toVector
-      context.log.infoN(
-        "Received Msg [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}]",
-        msg,
-        wasStashed,
-        consumersWithDemand.map(_._1).mkString(", "),
-        s.hasRequested)
+      if (context.log.isTraceEnabled)
+        context.log.traceN(
+          "Received message seqNr [{}], wasStashed [{}], consumersWithDemand [{}], hasRequested [{}].",
+          totalSeqNr,
+          wasStashed,
+          consumersWithDemand.map(_._1).mkString(", "),
+          s.hasRequested)
       if (!s.hasRequested && !wasStashed && durableQueue.isEmpty)
-        throw new IllegalStateException(s"Unexpected Msg [$msg], wasn't requested nor unstashed.")
+        throw new IllegalStateException(s"Unexpected message [$msg], wasn't requested nor unstashed.")
 
       val selectedWorker =
         if (durableQueue.isDefined) {
@@ -294,13 +300,13 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
                   Left(s)
               }
             case None =>
-              throw new IllegalStateException(s"Expected preselected worker for seqNr [$totalSeqNr]")
+              throw new IllegalStateException(s"Expected preselected worker for seqNr [$totalSeqNr].")
           }
         } else {
           selectWorker() match {
             case Some(w) => Right(w)
             case None =>
-              context.log.info("Stash [{}]", msg)
+              context.log.debug("Stashing message, seqNr [{}]", totalSeqNr)
               stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
               val newRequested = if (wasStashed) s.hasRequested else false
               Left(s.copy(hasRequested = newRequested))
@@ -320,7 +326,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
           }
 
           def tellRequestNext(): Unit = {
-            context.log.info("RequestNext after Msg [{}]", msg)
+            context.log.trace("Sending RequestNext to producer, seqNr [{}].", totalSeqNr)
             producer ! requestNext
           }
 
@@ -396,7 +402,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
               replyAfterStore = newReplyAfterStore))
         case None =>
           // no demand from any workers, or all already preselected
-          context.log.info("Stash before storage [{}]", msg)
+          context.log.debug("Stash before storage, seqNr [{}]", s.currentSeqNr)
           // not stored yet, so don't treat it as stashed
           stashBuffer.stash(Msg(msg, wasStashed = false, replyTo))
           active(s)
@@ -417,7 +423,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
               handOver = s.handOver.updated(s.currentSeqNr, HandOver(resend.oldConfirmationQualifier, resend.oldSeqNr))))
         case None =>
           // no demand from any workers, or all already preselected
-          context.log.info("Stash before storage [{}]", resend)
+          context.log.debug("Stash before storage of resent durable message, seqNr [{}].", s.currentSeqNr)
           // not stored yet, so don't treat it as stashed
           stashBuffer.stash(resend)
           active(s)
@@ -426,7 +432,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
     def receiveStoreMessageSentCompleted(seqNr: SeqNr, m: A) = {
       s.replyAfterStore.get(seqNr).foreach { replyTo =>
-        context.log.info("Confirmation reply to [{}] after storage", seqNr)
+        context.log.trace("Sending reply for seqNr [{}] after storage.", seqNr)
         replyTo ! Done
       }
 
@@ -458,7 +464,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       }
 
       if (confirmed.nonEmpty) {
-        context.log.info("Confirmed seqNr [{}] from worker [{}]", confirmedSeqNr, outState.confirmationQualifier)
+        context.log.trace("Received Ack seqNr [{}] from worker [{}].", confirmedSeqNr, outState.confirmationQualifier)
         confirmed.foreach {
           case Unconfirmed(_, _, _, None) => // no reply
           case Unconfirmed(_, _, _, Some(replyTo)) =>
@@ -480,7 +486,10 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       s.out.get(outKey) match {
         case Some(outState) =>
           val confirmedSeqNr = w.next.confirmedSeqNr
-          context.log.info2("WorkerRequestNext from [{}], confirmedSeqNr [{}]", w.next.producerId, confirmedSeqNr)
+          context.log.trace2(
+            "Received RequestNext from worker [{}], confirmedSeqNr [{}].",
+            w.next.producerId,
+            confirmedSeqNr)
 
           val newUnconfirmed = onAck(outState, confirmedSeqNr)
 
@@ -491,12 +500,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
                 .copy(seqNr = w.next.currentSeqNr, unconfirmed = newUnconfirmed, askNextTo = Some(next.askNextTo)))
 
           if (stashBuffer.nonEmpty) {
-            context.log.info2("Unstash [{}] after WorkerRequestNext from [{}]", stashBuffer.size, w.next.producerId)
+            context.log.debug2("Unstash [{}] after RequestNext from worker [{}]", stashBuffer.size, w.next.producerId)
             stashBuffer.unstashAll(active(s.copy(out = newOut)))
           } else if (s.hasRequested) {
             active(s.copy(out = newOut))
           } else {
-            context.log.info("RequestNext after WorkerRequestNext from [{}]", w.next.producerId)
+            context.log.trace("Sending RequestNext to producer after RequestNext from worker [{}].", w.next.producerId)
             producer ! requestNext
             active(s.copy(out = newOut, hasRequested = true))
           }
@@ -515,8 +524,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       val newState = addedWorkers.foldLeft(s) { (acc, c) =>
         val uuid = UUID.randomUUID().toString
         val outKey = s"$producerId-$uuid"
-        // FIXME adjust all logging, most should probably be debug
-        context.log.info2("Registered worker [{}], with producerId [{}]", c, outKey)
+        context.log.debug2("Registered worker [{}], with producerId [{}].", c, outKey)
         val p = context.spawn(
           ProducerController[A](outKey, durableQueueBehavior = None, settings.producerControllerSettings),
           uuid)
@@ -528,12 +536,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       val newState2 = removedWorkers.foldLeft(newState) { (acc, c) =>
         acc.out.find { case (_, outState) => outState.consumerController == c } match {
           case Some((key, outState)) =>
-            context.log.info2("Deregistered non-existing worker [{}], with producerId [{}]", c, key)
+            context.log.debug2("Deregistered worker [{}], with producerId [{}].", c, key)
             context.stop(outState.producerController)
             // resend the unconfirmed, sending to self since order of messages for WorkPulling doesn't matter anyway
             if (outState.unconfirmed.nonEmpty)
-              context.log.infoN(
-                "Resending unconfirmed from deregistered worker with producerId [{}], from seqNr [{}] to [{}]",
+              context.log.debugN(
+                "Resending unconfirmed from deregistered worker with producerId [{}], from seqNr [{}] to [{}].",
                 key,
                 outState.unconfirmed.head.outSeqNr,
                 outState.unconfirmed.last.outSeqNr)
@@ -547,7 +555,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
             acc.copy(out = acc.out - key)
 
           case None =>
-            context.log.info("Deregistered non-existing worker [{}]", c)
+            context.log.debug("Deregistered non-existing worker [{}]", c)
             acc
         }
       }
@@ -605,7 +613,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       context.log.error(errorMessage)
       throw new TimeoutException(errorMessage)
     } else {
-      context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+      context.log.warn("StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
       // retry
       storeMessageSent(f.messageSent, attempt = f.attempt + 1)
       Behaviors.same

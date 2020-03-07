@@ -22,6 +22,7 @@ import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.scaladsl.LoggerOps
 import akka.actor.typed.scaladsl.StashBuffer
 import akka.annotation.InternalApi
 import akka.cluster.sharding.typed.ShardingEnvelope
@@ -95,19 +96,21 @@ import akka.util.Timeout
     Behaviors
       .withStash[InternalCommand](settings.bufferSize) { stashBuffer =>
         Behaviors.setup[InternalCommand] { context =>
-          context.setLoggerName("akka.cluster.sharding.typed.delivery.ShardingProducerController")
+          Behaviors.withMdc(staticMdc = Map("producerId" -> producerId)) {
+            context.setLoggerName("akka.cluster.sharding.typed.delivery.ShardingProducerController")
 
-          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
+            val durableQueue = askLoadState(context, durableQueueBehavior, settings)
 
-          waitingForStart(
-            producerId,
-            context,
-            stashBuffer,
-            region,
-            durableQueue,
-            None,
-            createInitialState(durableQueue.nonEmpty),
-            settings)
+            waitingForStart(
+              producerId,
+              context,
+              stashBuffer,
+              region,
+              durableQueue,
+              None,
+              createInitialState(durableQueue.nonEmpty),
+              settings)
+          }
         }
       }
       .narrow
@@ -190,7 +193,10 @@ import akka.util.Timeout
           context.log.error(errorMessage)
           throw new TimeoutException(errorMessage)
         } else {
-          context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+          context.log.warn(
+            "LoadState failed, attempt [{}] of [{}], retrying.",
+            attempt,
+            settings.producerControllerSettings.durableQueueRetryAttempts)
           // retry
           askLoadState(context, durableQueue, settings, attempt + 1)
           Behaviors.same
@@ -281,7 +287,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
           case Some(out @ OutState(_, _, None, buffered, _, _)) =>
             // no demand, buffer
             // FIXME limit the buffers.
-            context.log.info("Buffering message to entityId [{}], buffer size [{}]", entityId, buffered.size + 1)
+            context.log.debug("Buffering message to entityId [{}], buffer size [{}]", entityId, buffered.size + 1)
             val newBuffered = buffered :+ Buffered(totalSeqNr, msg, replyTo)
             val newS =
               s.copy(
@@ -291,7 +297,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
             producer ! createRequestNext(newS)
             newS
           case None =>
-            context.log.info("Creating ProducerController for entity [{}]", entityId)
+            context.log.debug("Creating ProducerController for entity [{}]", entityId)
             val send: ConsumerController.SequencedMessage[A] => Unit = { seqMsg =>
               region ! ShardingEnvelope(entityId, seqMsg)
             }
@@ -315,7 +321,6 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       }
 
       if (confirmed.nonEmpty) {
-        context.log.info("Confirmed seqNr [{}] from entity [{}]", confirmedSeqNr, outState.entityId)
         confirmed.foreach {
           case Unconfirmed(_, _, None) => // no reply
           case Unconfirmed(_, _, Some(replyTo)) =>
@@ -361,10 +366,11 @@ private class ShardingProducerControllerImpl[A: ClassTag](
     def receiveAck(ack: Ack): Behavior[InternalCommand] = {
       s.out.get(ack.outKey) match {
         case Some(outState) =>
+          context.log.trace2("Received Ack, confirmed [{}], current [{}].", ack.confirmedSeqNr, s.currentSeqNr)
           val newUnconfirmed = onAck(outState, ack.confirmedSeqNr)
           active(s.copy(out = s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed))))
         case None =>
-          // obsolete Next, ConsumerController already deregistered
+          // obsolete Ack, ConsumerController already deregistered
           Behaviors.unhandled
       }
     }
@@ -378,7 +384,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
             throw new IllegalStateException(s"Received RequestNext but already has demand for [$outKey]")
 
           val confirmedSeqNr = w.next.confirmedSeqNr
-          context.log.info("RequestNext from [{}], confirmed seqNr [{}]", out.entityId, confirmedSeqNr)
+          context.log.trace("Received RequestNext from [{}], confirmed seqNr [{}]", out.entityId, confirmedSeqNr)
           val newUnconfirmed = onAck(out, confirmedSeqNr)
 
           if (out.buffered.nonEmpty) {
@@ -456,7 +462,8 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   }
 
   private def send(msg: A, outKey: OutKey, outSeqNr: OutSeqNr, nextTo: ProducerController.RequestNext[A]): Unit = {
-    context.log.info("send [{}], outSeqNr [{}]", msg, outSeqNr) // FIXME remove
+    if (context.log.isTraceEnabled)
+      context.log.trace("Sending [{}] with outSeqNr [{}].", msg.getClass.getName, outSeqNr)
     implicit val askTimeout: Timeout = sendTimeout
     context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
       nextTo.askNextTo,

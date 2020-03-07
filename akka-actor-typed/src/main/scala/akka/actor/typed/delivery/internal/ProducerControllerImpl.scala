@@ -121,21 +121,23 @@ object ProducerControllerImpl {
       settings: ProducerController.Settings): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
-        context.setLoggerName("akka.actor.typed.delivery.ProducerController")
-        val durableQueue = askLoadState(context, durableQueueBehavior, settings)
-        waitingForInitialization[A](
-          context,
-          None,
-          None,
-          durableQueue,
-          settings,
-          createInitialState(durableQueue.nonEmpty)) { (producer, consumerController, loadedState) =>
-          val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
-          becomeActive(
-            producerId,
+        Behaviors.withMdc(staticMdc = Map("producerId" -> producerId)) {
+          context.setLoggerName("akka.actor.typed.delivery.ProducerController")
+          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
+          waitingForInitialization[A](
+            context,
+            None,
+            None,
             durableQueue,
             settings,
-            createState(context.self, producerId, send, producer, loadedState))
+            createInitialState(durableQueue.nonEmpty)) { (producer, consumerController, loadedState) =>
+            val send: ConsumerController.SequencedMessage[A] => Unit = consumerController ! _
+            becomeActive(
+              producerId,
+              durableQueue,
+              settings,
+              createState(context.self, producerId, send, producer, loadedState))
+          }
         }
       }
       .narrow
@@ -152,21 +154,23 @@ object ProducerControllerImpl {
       send: ConsumerController.SequencedMessage[A] => Unit): Behavior[Command[A]] = {
     Behaviors
       .setup[InternalCommand] { context =>
-        context.setLoggerName("akka.actor.typed.delivery.ProducerController")
-        val durableQueue = askLoadState(context, durableQueueBehavior, settings)
-        // ConsumerController not used here
-        waitingForInitialization[A](
-          context,
-          None,
-          consumerController = Some(context.system.deadLetters),
-          durableQueue,
-          settings,
-          createInitialState(durableQueue.nonEmpty)) { (producer, _, loadedState) =>
-          becomeActive(
-            producerId,
+        Behaviors.withMdc(staticMdc = Map("producerId" -> producerId)) {
+          context.setLoggerName("akka.actor.typed.delivery.ProducerController")
+          val durableQueue = askLoadState(context, durableQueueBehavior, settings)
+          // ConsumerController not used here
+          waitingForInitialization[A](
+            context,
+            None,
+            consumerController = Some(context.system.deadLetters),
             durableQueue,
             settings,
-            createState(context.self, producerId, send, producer, loadedState))
+            createInitialState(durableQueue.nonEmpty)) { (producer, _, loadedState) =>
+            becomeActive(
+              producerId,
+              durableQueue,
+              settings,
+              createState(context.self, producerId, send, producer, loadedState))
+          }
         }
       }
       .narrow
@@ -270,7 +274,10 @@ object ProducerControllerImpl {
           context.log.error(errorMessage)
           throw new TimeoutException(errorMessage)
         } else {
-          context.log.info("LoadState attempt [{}] failed, retrying.", attempt)
+          context.log.warn(
+            "LoadState failed, attempt [{}] of [{}], retrying.",
+            attempt,
+            settings.durableQueueRetryAttempts)
           // retry
           askLoadState(context, durableQueue, settings, attempt + 1)
           Behaviors.same
@@ -292,7 +299,7 @@ object ProducerControllerImpl {
             state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
             true
           } else {
-            ctx.log.info("Starting with [{}] unconfirmed.", state.unconfirmed.size)
+            ctx.log.debug("Starting with [{}] unconfirmed.", state.unconfirmed.size)
             ctx.self ! ResendFirst
             false
           }
@@ -336,8 +343,8 @@ private class ProducerControllerImpl[A: ClassTag](
 
     def onMsg(m: A, newReplyAfterStore: Map[SeqNr, ActorRef[SeqNr]], ack: Boolean): Behavior[InternalCommand] = {
       checkOnMsgRequestedState()
-      // FIXME adjust all logging, most should probably be debug
-      context.log.info("sent [{}]", s.currentSeqNr)
+      if (context.log.isTraceEnabled)
+        context.log.trace("Sending [{}] with seqNr [{}].", m.getClass.getName, s.currentSeqNr)
       val seqMsg = SequencedMessage(producerId, s.currentSeqNr, m, s.currentSeqNr == s.firstSeqNr, ack)(context.self)
       val newUnconfirmed =
         if (s.supportResend) s.unconfirmed :+ seqMsg
@@ -375,8 +382,8 @@ private class ProducerControllerImpl[A: ClassTag](
         newRequestedSeqNr: SeqNr,
         supportResend: Boolean,
         viaTimeout: Boolean): Behavior[InternalCommand] = {
-      context.log.infoN(
-        "Request, confirmed [{}], requested [{}], current [{}]",
+      context.log.debugN(
+        "Received Request, confirmed [{}], requested [{}], current [{}]",
         newConfirmedSeqNr,
         newRequestedSeqNr,
         s.currentSeqNr)
@@ -399,7 +406,7 @@ private class ProducerControllerImpl[A: ClassTag](
         else
           newRequestedSeqNr
       if (newRequestedSeqNr2 != newRequestedSeqNr)
-        context.log.infoN(
+        context.log.debugN(
           "Expanded requestedSeqNr from [{}] to [{}], because current [{}] and all were probably lost",
           newRequestedSeqNr,
           newRequestedSeqNr2,
@@ -420,7 +427,7 @@ private class ProducerControllerImpl[A: ClassTag](
     }
 
     def receiveAck(newConfirmedSeqNr: SeqNr): Behavior[InternalCommand] = {
-      context.log.infoN("Ack, confirmed [{}], current [{}]", newConfirmedSeqNr, s.currentSeqNr)
+      context.log.trace2("Received Ack, confirmed [{}], current [{}].", newConfirmedSeqNr, s.currentSeqNr)
       val stateAfterAck = onAck(newConfirmedSeqNr)
       if (newConfirmedSeqNr == s.firstSeqNr && stateAfterAck.unconfirmed.nonEmpty) {
         resendUnconfirmed(stateAfterAck.unconfirmed)
@@ -431,7 +438,7 @@ private class ProducerControllerImpl[A: ClassTag](
     def onAck(newConfirmedSeqNr: SeqNr): State[A] = {
       val (replies, newReplyAfterStore) = s.replyAfterStore.partition { case (seqNr, _) => seqNr <= newConfirmedSeqNr }
       if (replies.nonEmpty)
-        context.log.info("Confirmation replies from [{}] to [{}]", replies.head._1, replies.last._1)
+        context.log.trace("Sending confirmation replies from [{}] to [{}].", replies.head._1, replies.last._1)
       replies.foreach {
         case (seqNr, replyTo) => replyTo ! seqNr
       }
@@ -460,7 +467,7 @@ private class ProducerControllerImpl[A: ClassTag](
         throw new IllegalStateException(s"currentSeqNr [${s.currentSeqNr}] not matching stored seqNr [$seqNr]")
 
       s.replyAfterStore.get(seqNr).foreach { replyTo =>
-        context.log.info("Confirmation reply to [{}] after storage", seqNr)
+        context.log.trace("Sending confirmation reply to [{}] after storage.", seqNr)
         replyTo ! seqNr
       }
       val newReplyAfterStore = s.replyAfterStore - seqNr
@@ -476,13 +483,13 @@ private class ProducerControllerImpl[A: ClassTag](
 
     def resendUnconfirmed(newUnconfirmed: Vector[SequencedMessage[A]]): Unit = {
       if (newUnconfirmed.nonEmpty)
-        context.log.info("resending [{} - {}]", newUnconfirmed.head.seqNr, newUnconfirmed.last.seqNr)
+        context.log.debug("Resending [{} - {}].", newUnconfirmed.head.seqNr, newUnconfirmed.last.seqNr)
       newUnconfirmed.foreach(s.send)
     }
 
     def receiveResendFirst(): Behavior[InternalCommand] = {
       if (s.unconfirmed.nonEmpty && s.unconfirmed.head.seqNr == s.firstSeqNr) {
-        context.log.info("resending first, [{}]", s.firstSeqNr)
+        context.log.debug("Resending first, [{}].", s.firstSeqNr)
         s.send(s.unconfirmed.head.copy(first = true)(context.self))
       } else {
         if (s.currentSeqNr > s.firstSeqNr)
@@ -493,7 +500,7 @@ private class ProducerControllerImpl[A: ClassTag](
 
     def receiveStart(start: Start[A]): Behavior[InternalCommand] = {
       ProducerControllerImpl.enforceLocalProducer(start.producer)
-      context.log.info("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
+      context.log.debug("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
       if (s.requested)
         start.producer ! RequestNext(producerId, s.currentSeqNr, s.confirmedSeqNr, msgAdapter, context.self)
       active(s.copy(producer = start.producer))
@@ -504,7 +511,7 @@ private class ProducerControllerImpl[A: ClassTag](
       val newFirstSeqNr =
         if (s.unconfirmed.isEmpty) s.currentSeqNr
         else s.unconfirmed.head.seqNr
-      context.log.info(
+      context.log.debug(
         "Register new ConsumerController [{}], starting with seqNr [{}].",
         consumerController,
         newFirstSeqNr)
@@ -568,7 +575,11 @@ private class ProducerControllerImpl[A: ClassTag](
       context.log.error(errorMessage)
       throw new TimeoutException(errorMessage)
     } else {
-      context.log.info(s"StoreMessageSent seqNr [{}] failed, attempt [{}], retrying.", f.messageSent.seqNr, f.attempt)
+      context.log.warnN(
+        "StoreMessageSent seqNr [{}] failed, attempt [{}] of [{}], retrying.",
+        f.messageSent.seqNr,
+        f.attempt,
+        settings.durableQueueRetryAttempts)
       // retry
       storeMessageSent(f.messageSent, attempt = f.attempt + 1)
       Behaviors.same
