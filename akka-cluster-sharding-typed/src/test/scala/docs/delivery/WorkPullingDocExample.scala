@@ -41,13 +41,13 @@ object WorkPullingDocExample {
 
         Behaviors.receiveMessage {
           case WrappedDelivery(delivery) =>
-            val image = delivery.msg.image
-            val fromFormat = delivery.msg.fromFormat
-            val toFormat = delivery.msg.toFormat
+            val image = delivery.message.image
+            val fromFormat = delivery.message.fromFormat
+            val toFormat = delivery.message.toFormat
             // convert image...
 
             // and when completed confirm
-            delivery.confirmTo ! ConsumerController.Confirmed(delivery.seqNr)
+            delivery.confirmTo ! ConsumerController.Confirmed
 
             Behaviors.same
         }

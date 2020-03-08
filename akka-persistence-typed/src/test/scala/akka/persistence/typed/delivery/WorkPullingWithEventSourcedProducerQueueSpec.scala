@@ -62,7 +62,7 @@ class WorkPullingWithEventSourcedProducerQueueSpec
       producerProbe.receiveMessage().sendNextTo ! "c"
       producerProbe.receiveMessage()
 
-      consumerProbe.receiveMessage().msg should ===("a")
+      consumerProbe.receiveMessage().message should ===("a")
 
       system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
@@ -81,23 +81,23 @@ class WorkPullingWithEventSourcedProducerQueueSpec
       consumerController2 ! ConsumerController.Start(consumerProbe.ref)
 
       val delivery1 = consumerProbe.receiveMessage()
-      delivery1.msg should ===("a")
-      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
+      delivery1.message should ===("a")
+      delivery1.confirmTo ! ConsumerController.Confirmed
 
       val delivery2 = consumerProbe.receiveMessage()
-      delivery2.msg should ===("b")
-      delivery2.confirmTo ! ConsumerController.Confirmed(delivery2.seqNr)
+      delivery2.message should ===("b")
+      delivery2.confirmTo ! ConsumerController.Confirmed
 
       val delivery3 = consumerProbe.receiveMessage()
-      delivery3.msg should ===("c")
-      delivery3.confirmTo ! ConsumerController.Confirmed(delivery3.seqNr)
+      delivery3.message should ===("c")
+      delivery3.confirmTo ! ConsumerController.Confirmed
 
       val requestNext4 = producerProbe.receiveMessage()
       requestNext4.sendNextTo ! "d"
 
       val delivery4 = consumerProbe.receiveMessage()
-      delivery4.msg should ===("d")
-      delivery4.confirmTo ! ConsumerController.Confirmed(delivery4.seqNr)
+      delivery4.message should ===("d")
+      delivery4.confirmTo ! ConsumerController.Confirmed
 
       testKit.stop(producerController2)
       testKit.stop(consumerController2)
@@ -125,7 +125,7 @@ class WorkPullingWithEventSourcedProducerQueueSpec
       producerProbe.receiveMessage()
 
       val delivery1 = consumerProbe.receiveMessage()
-      delivery1.msg should ===("a")
+      delivery1.message should ===("a")
 
       system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
@@ -138,43 +138,43 @@ class WorkPullingWithEventSourcedProducerQueueSpec
       producerController2 ! WorkPullingProducerController.Start(producerProbe.ref)
 
       // Delivery in flight from old dead WorkPullingProducerController, confirmation will not be stored
-      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
+      delivery1.confirmTo ! ConsumerController.Confirmed
 
       // from old, buffered in ConsumerController
       val delivery2 = consumerProbe.receiveMessage()
-      delivery2.msg should ===("b")
-      delivery2.confirmTo ! ConsumerController.Confirmed(delivery2.seqNr)
+      delivery2.message should ===("b")
+      delivery2.confirmTo ! ConsumerController.Confirmed
 
       // from old, buffered in ConsumerController
       val delivery3 = consumerProbe.receiveMessage()
-      delivery3.msg should ===("c")
-      delivery3.confirmTo ! ConsumerController.Confirmed(delivery3.seqNr)
+      delivery3.message should ===("c")
+      delivery3.confirmTo ! ConsumerController.Confirmed
 
       val requestNext4 = producerProbe.receiveMessage()
       requestNext4.sendNextTo ! "d"
 
       // TODO Should we try harder to deduplicate first?
       val redelivery1 = consumerProbe.receiveMessage()
-      redelivery1.msg should ===("a")
-      redelivery1.confirmTo ! ConsumerController.Confirmed(redelivery1.seqNr)
+      redelivery1.message should ===("a")
+      redelivery1.confirmTo ! ConsumerController.Confirmed
 
       producerProbe.receiveMessage().sendNextTo ! "e"
 
       val redelivery2 = consumerProbe.receiveMessage()
-      redelivery2.msg should ===("b")
-      redelivery2.confirmTo ! ConsumerController.Confirmed(redelivery2.seqNr)
+      redelivery2.message should ===("b")
+      redelivery2.confirmTo ! ConsumerController.Confirmed
 
       val redelivery3 = consumerProbe.receiveMessage()
-      redelivery3.msg should ===("c")
-      redelivery3.confirmTo ! ConsumerController.Confirmed(redelivery3.seqNr)
+      redelivery3.message should ===("c")
+      redelivery3.confirmTo ! ConsumerController.Confirmed
 
       val delivery4 = consumerProbe.receiveMessage()
-      delivery4.msg should ===("d")
-      delivery4.confirmTo ! ConsumerController.Confirmed(delivery4.seqNr)
+      delivery4.message should ===("d")
+      delivery4.confirmTo ! ConsumerController.Confirmed
 
       val delivery5 = consumerProbe.receiveMessage()
-      delivery5.msg should ===("e")
-      delivery5.confirmTo ! ConsumerController.Confirmed(delivery5.seqNr)
+      delivery5.message should ===("e")
+      delivery5.confirmTo ! ConsumerController.Confirmed
 
       testKit.stop(producerController2)
       testKit.stop(consumerController)
@@ -211,11 +211,11 @@ class WorkPullingWithEventSourcedProducerQueueSpec
 
       (1 to confirmed1).foreach { _ =>
         received :+= consumerProbe.receiveMessage()
-        received.last.confirmTo ! ConsumerController.Confirmed(received.last.seqNr)
+        received.last.confirmTo ! ConsumerController.Confirmed
       }
 
       system.log.debug("Workers received [{}]", received.mkString(", "))
-      received.map(_.msg).toSet.size should ===(confirmed1)
+      received.map(_.message).toSet.size should ===(confirmed1)
 
       producerProbe.receiveMessage()
 
@@ -241,15 +241,15 @@ class WorkPullingWithEventSourcedProducerQueueSpec
 
       consumerProbe.fishForMessage(consumerProbe.remainingOrDefault) { delivery =>
         received :+= delivery
-        delivery.confirmTo ! ConsumerController.Confirmed(delivery.seqNr)
-        if (received.map(_.msg).toSet.size == batch1 + batch2)
+        delivery.confirmTo ! ConsumerController.Confirmed
+        if (received.map(_.message).toSet.size == batch1 + batch2)
           FishingOutcome.Complete
         else
           FishingOutcome.Continue
       }
 
       system.log.debug("Workers received [{}]", received.mkString(", "))
-      received.map(_.msg).toSet should ===((1 to batch1 + batch2).map(n => s"msg-$n").toSet)
+      received.map(_.message).toSet should ===((1 to batch1 + batch2).map(n => s"msg-$n").toSet)
 
       testKit.stop(producerController2)
       testKit.stop(consumerController1)

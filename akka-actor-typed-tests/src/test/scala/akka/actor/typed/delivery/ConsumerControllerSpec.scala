@@ -78,7 +78,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, true))
 
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       testKit.stop(consumerController)
@@ -102,7 +102,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, windowSize, true, false))
       (1 until windowSize / 2).foreach { n =>
         consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-        consumerController ! ConsumerController.Confirmed(n)
+        consumerController ! ConsumerController.Confirmed
         if (n == 1)
           producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, windowSize, true, false))
       }
@@ -113,7 +113,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
       producerControllerProbe.expectNoMessage()
-      consumerController ! ConsumerController.Confirmed(windowSize / 2)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(
         ProducerControllerImpl.Request(windowSize / 2, windowSize + windowSize / 2, true, false))
 
@@ -132,14 +132,14 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(2)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
       producerControllerProbe.expectMessage(ProducerControllerImpl.Resend(3))
@@ -149,11 +149,11 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
-      consumerController ! ConsumerController.Confirmed(4)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
-      consumerController ! ConsumerController.Confirmed(5)
+      consumerController ! ConsumerController.Confirmed
 
       testKit.stop(consumerController)
     }
@@ -170,21 +170,21 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(2)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(2, 20, true, true))
 
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(3, 20, true, true))
 
       testKit.stop(consumerController)
@@ -202,7 +202,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
@@ -213,11 +213,11 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
       consumerProbe.expectNoMessage()
 
-      consumerController ! ConsumerController.Confirmed(2)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
-      consumerController ! ConsumerController.Confirmed(4)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
       consumerController ! sequencedMessage(producerId, 6, producerControllerProbe.ref)
@@ -230,13 +230,13 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 8, producerControllerProbe.ref)
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
-      consumerController ! ConsumerController.Confirmed(5)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(6)
-      consumerController ! ConsumerController.Confirmed(6)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(7)
-      consumerController ! ConsumerController.Confirmed(7)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(8)
-      consumerController ! ConsumerController.Confirmed(8)
+      consumerController ! ConsumerController.Confirmed
 
       consumerProbe.expectNoMessage()
 
@@ -255,14 +255,14 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref, ack = true)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref, ack = true)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(2)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(2))
 
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref, ack = true)
@@ -270,12 +270,12 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref, ack = true)
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(3))
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
-      consumerController ! ConsumerController.Confirmed(4)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(5)
-      consumerController ! ConsumerController.Confirmed(5)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(5))
 
       testKit.stop(consumerController)
@@ -293,14 +293,14 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(2)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
@@ -310,11 +310,11 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! ConsumerController.Start(consumerProbe2.ref)
 
       consumerProbe2.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
       consumerProbe2.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
-      consumerController ! ConsumerController.Confirmed(4)
+      consumerController ! ConsumerController.Confirmed
 
       testKit.stop(consumerController)
     }
@@ -332,7 +332,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       consumerProbe1.stop()
       createTestProbe().expectTerminated(consumerController)
@@ -365,7 +365,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
       // that Request will typically cancel the resending of first, but in unlucky timing it may happen
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
-      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       // deduplicated, not delivered again
@@ -375,7 +375,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe2.ref)
       producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(0, 20, true, false))
-      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
       producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(1, 20, true, false))
 
       testKit.stop(consumerController)
@@ -393,20 +393,20 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, flowControlWindow, true, false))
-      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(1)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
 
       // and if the ProducerController is changed
       val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref)
         .copy(first = true)(producerControllerProbe2.ref)
       producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(0, 23 + flowControlWindow - 1, true, false))
-      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(23)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
 
       val producerControllerProbe3 = createTestProbe[ProducerControllerImpl.InternalCommand]()
       consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref)
         .copy(first = true)(producerControllerProbe3.ref)
       producerControllerProbe3.expectMessage(ProducerControllerImpl.Request(0, 7 + flowControlWindow - 1, true, false))
-      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed(7)
+      consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
 
       testKit.stop(consumerController)
     }
@@ -431,7 +431,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 60, true, false))
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(41)
-      consumerController ! ConsumerController.Confirmed(41)
+      consumerController ! ConsumerController.Confirmed
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(41, 60, true, false))
 
       // 45 not expected
@@ -444,17 +444,17 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 45, producerControllerProbe.ref)
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(42)
-      consumerController ! ConsumerController.Confirmed(42)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(43)
-      consumerController ! ConsumerController.Confirmed(43)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(44)
-      consumerController ! ConsumerController.Confirmed(44)
+      consumerController ! ConsumerController.Confirmed
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(45)
-      consumerController ! ConsumerController.Confirmed(45)
+      consumerController ! ConsumerController.Confirmed
 
       consumerController ! sequencedMessage(producerId, 46, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(46)
-      consumerController ! ConsumerController.Confirmed(46)
+      consumerController ! ConsumerController.Confirmed
 
       testKit.stop(consumerController)
     }
@@ -474,7 +474,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
-      consumerController ! ConsumerController.Confirmed(1)
+      consumerController ! ConsumerController.Confirmed
 
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 20, supportResend = false, false))
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(1, 20, supportResend = false, false))
@@ -482,15 +482,15 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       // skipping 2
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(3)
-      consumerController ! ConsumerController.Confirmed(3)
+      consumerController ! ConsumerController.Confirmed
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(4)
-      consumerController ! ConsumerController.Confirmed(4)
+      consumerController ! ConsumerController.Confirmed
 
       // skip many
       consumerController ! sequencedMessage(producerId, 35, producerControllerProbe.ref)
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(35)
-      consumerController ! ConsumerController.Confirmed(35)
+      consumerController ! ConsumerController.Confirmed
 
       testKit.stop(consumerController)
     }

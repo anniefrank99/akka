@@ -53,7 +53,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       producerProbe.receiveMessage().sendNextTo ! "c"
       producerProbe.receiveMessage()
 
-      consumerProbe.receiveMessage().msg should ===("a")
+      consumerProbe.receiveMessage().message should ===("a")
 
       system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
@@ -72,24 +72,24 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       consumerController2 ! ConsumerController.RegisterToProducerController(producerController2)
 
       val delivery1 = consumerProbe.receiveMessage()
-      delivery1.msg should ===("a")
-      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
+      delivery1.message should ===("a")
+      delivery1.confirmTo ! ConsumerController.Confirmed
 
       val delivery2 = consumerProbe.receiveMessage()
-      delivery2.msg should ===("b")
-      delivery2.confirmTo ! ConsumerController.Confirmed(delivery2.seqNr)
+      delivery2.message should ===("b")
+      delivery2.confirmTo ! ConsumerController.Confirmed
 
       val delivery3 = consumerProbe.receiveMessage()
-      delivery3.msg should ===("c")
-      delivery3.confirmTo ! ConsumerController.Confirmed(delivery3.seqNr)
+      delivery3.message should ===("c")
+      delivery3.confirmTo ! ConsumerController.Confirmed
 
       val requestNext4 = producerProbe.receiveMessage()
       requestNext4.currentSeqNr should ===(4)
       requestNext4.sendNextTo ! "d"
 
       val delivery4 = consumerProbe.receiveMessage()
-      delivery4.msg should ===("d")
-      delivery4.confirmTo ! ConsumerController.Confirmed(delivery4.seqNr)
+      delivery4.message should ===("d")
+      delivery4.confirmTo ! ConsumerController.Confirmed
 
       testKit.stop(producerController2)
       testKit.stop(consumerController2)
@@ -116,7 +116,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       producerProbe.receiveMessage()
 
       val delivery1 = consumerProbe.receiveMessage()
-      delivery1.msg should ===("a")
+      delivery1.message should ===("a")
 
       system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
@@ -132,7 +132,7 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       producerController2 ! ProducerController.Start(producerProbe.ref)
       consumerController ! ConsumerController.RegisterToProducerController(producerController2)
 
-      delivery1.confirmTo ! ConsumerController.Confirmed(delivery1.seqNr)
+      delivery1.confirmTo ! ConsumerController.Confirmed
 
       val requestNext4 = producerProbe.receiveMessage()
       requestNext4.currentSeqNr should ===(4)
@@ -140,26 +140,26 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
 
       // TODO Should we try harder to deduplicate first?
       val redelivery1 = consumerProbe.receiveMessage()
-      redelivery1.msg should ===("a")
-      redelivery1.confirmTo ! ConsumerController.Confirmed(redelivery1.seqNr)
+      redelivery1.message should ===("a")
+      redelivery1.confirmTo ! ConsumerController.Confirmed
 
       producerProbe.receiveMessage().sendNextTo ! "e"
 
       val redelivery2 = consumerProbe.receiveMessage()
-      redelivery2.msg should ===("b")
-      redelivery2.confirmTo ! ConsumerController.Confirmed(redelivery2.seqNr)
+      redelivery2.message should ===("b")
+      redelivery2.confirmTo ! ConsumerController.Confirmed
 
       val redelivery3 = consumerProbe.receiveMessage()
-      redelivery3.msg should ===("c")
-      redelivery3.confirmTo ! ConsumerController.Confirmed(redelivery3.seqNr)
+      redelivery3.message should ===("c")
+      redelivery3.confirmTo ! ConsumerController.Confirmed
 
       val delivery4 = consumerProbe.receiveMessage()
-      delivery4.msg should ===("d")
-      delivery4.confirmTo ! ConsumerController.Confirmed(delivery4.seqNr)
+      delivery4.message should ===("d")
+      delivery4.confirmTo ! ConsumerController.Confirmed
 
       val delivery5 = consumerProbe.receiveMessage()
-      delivery5.msg should ===("e")
-      delivery5.confirmTo ! ConsumerController.Confirmed(delivery5.seqNr)
+      delivery5.message should ===("e")
+      delivery5.confirmTo ! ConsumerController.Confirmed
 
       testKit.stop(producerController2)
       testKit.stop(consumerController)

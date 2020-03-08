@@ -17,6 +17,7 @@ import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.ApiMayChange
+import akka.annotation.DoNotInherit
 import akka.annotation.InternalApi
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
@@ -56,20 +57,41 @@ object ConsumerController {
    */
   final case class Start[A](deliverTo: ActorRef[Delivery[A]]) extends Command[A]
 
+  object Delivery {
+    def apply[A](message: A, confirmTo: ActorRef[Confirmed], producerId: String, seqNr: SeqNr): Delivery[A] =
+      new Delivery(message, confirmTo, producerId, seqNr)
+
+    def unapply[A](delivery: Delivery[A]): Option[(A, ActorRef[Confirmed])] =
+      Option((delivery.message, delivery.confirmTo))
+  }
+
   /**
    * Received messages from the producer are wrapped in `Delivery` when sent to the consumer.
    * When the message has been processed the consumer is supposed to send [[Confirmed]] back
    * to the `ConsumerController` via the `confirmTo`.
    */
-  final case class Delivery[A](producerId: String, seqNr: SeqNr, msg: A, confirmTo: ActorRef[Confirmed])
+  final class Delivery[A](
+      val message: A,
+      val confirmTo: ActorRef[Confirmed],
+      val producerId: String,
+      val seqNr: SeqNr) {
+    override def toString: String = s"Delivery($message,$confirmTo,$producerId,$seqNr)"
+  }
+
+  @DoNotInherit
+  trait Confirmed extends UnsealedInternalCommand
 
   /**
    * When the message has been processed the consumer is supposed to send `Confirmed` back
    * to the `ConsumerController` via the `confirmTo` in the [[Delivery]] message.
-   *
-   * The `seqNr` must correspond to the `seqNr` in the [[Delivery]].
    */
-  final case class Confirmed(seqNr: SeqNr) extends UnsealedInternalCommand
+  case object Confirmed extends Confirmed {
+
+    /**
+     * Java API: the singleton instance of the Confirmed message
+     */
+    def getInstance: Confirmed = Confirmed
+  }
 
   /**
    * Register the `ConsumerController` to the given `producerController`. It will

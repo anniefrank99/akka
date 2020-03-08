@@ -188,7 +188,6 @@ private class ConsumerControllerImpl[A](
   import ConsumerController.Confirmed
   import ConsumerController.Delivery
   import ConsumerController.RegisterToProducerController
-  import ConsumerController.SeqNr
   import ConsumerController.SequencedMessage
   import ConsumerController.Start
   import ConsumerControllerImpl._
@@ -232,7 +231,7 @@ private class ConsumerControllerImpl[A](
             seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
             resending(s)
           } else {
-            s.consumer ! Delivery(pid, seqNr, seqMsg.msg, context.self)
+            s.consumer ! Delivery(seqMsg.msg, context.self, pid, seqNr)
             waitingForConfirmation(s.copy(receivedSeqNr = seqNr), seqMsg)
           }
         } else { // seqNr < expectedSeqNr
@@ -246,8 +245,8 @@ private class ConsumerControllerImpl[A](
       case Retry =>
         receiveRetry(s, () => active(retryRequest(s)))
 
-      case Confirmed(seqNr) =>
-        receiveUnexpectedConfirmed(seqNr)
+      case Confirmed =>
+        receiveUnexpectedConfirmed()
 
       case start: Start[A] =>
         receiveStart(s, start, newState => active(newState))
@@ -342,8 +341,8 @@ private class ConsumerControllerImpl[A](
           Behaviors.same
         })
 
-      case Confirmed(seqNr) =>
-        receiveUnexpectedConfirmed(seqNr)
+      case Confirmed =>
+        receiveUnexpectedConfirmed()
 
       case start: Start[A] =>
         receiveStart(s, start, newState => resending(newState))
@@ -360,7 +359,7 @@ private class ConsumerControllerImpl[A](
   }
 
   private def deliver(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
-    s.consumer ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
+    s.consumer ! Delivery(seqMsg.msg, context.self, seqMsg.producerId, seqMsg.seqNr)
     waitingForConfirmation(s, seqMsg)
   }
 
@@ -368,44 +367,39 @@ private class ConsumerControllerImpl[A](
   // the consumer. New SequencedMessage from the ProducerController will be stashed.
   private def waitingForConfirmation(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
     Behaviors.receiveMessage {
-      case Confirmed(seqNr) =>
-        val expectedSeqNr = s.receivedSeqNr
-        if (seqNr == expectedSeqNr) {
-          context.log.trace("Received Confirmed seqNr [{}] from consumer, stashed size [{}].", seqNr, stashBuffer.size)
+      case Confirmed =>
+        val seqNr = seqMsg.seqNr
+        context.log.trace("Received Confirmed seqNr [{}] from consumer, stashed size [{}].", seqNr, stashBuffer.size)
 
-          val newRequestedSeqNr =
-            if (seqMsg.first) {
-              // confirm the first message immediately to cancel resending of first
-              val newRequestedSeqNr = seqNr - 1 + flowControlWindow
-              context.log.debug(
-                "Sending Request after first with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
-                seqNr,
-                newRequestedSeqNr)
-              s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
-              newRequestedSeqNr
-            } else if ((s.requestedSeqNr - seqNr) == flowControlWindow / 2) {
-              val newRequestedSeqNr = s.requestedSeqNr + flowControlWindow / 2
-              context.log.debug(
-                "Sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
-                seqNr,
-                newRequestedSeqNr)
-              s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
-              startRetryTimer() // reset interval since Request was just sent
-              newRequestedSeqNr
-            } else {
-              if (seqMsg.ack) {
-                context.log.trace("Sending Ack seqNr [{}].", seqNr)
-                s.producerController ! Ack(confirmedSeqNr = seqNr)
-              }
-
-              s.requestedSeqNr
+        val newRequestedSeqNr =
+          if (seqMsg.first) {
+            // confirm the first message immediately to cancel resending of first
+            val newRequestedSeqNr = seqNr - 1 + flowControlWindow
+            context.log.debug(
+              "Sending Request after first with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
+              seqNr,
+              newRequestedSeqNr)
+            s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
+            newRequestedSeqNr
+          } else if ((s.requestedSeqNr - seqNr) == flowControlWindow / 2) {
+            val newRequestedSeqNr = s.requestedSeqNr + flowControlWindow / 2
+            context.log.debug(
+              "Sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
+              seqNr,
+              newRequestedSeqNr)
+            s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
+            startRetryTimer() // reset interval since Request was just sent
+            newRequestedSeqNr
+          } else {
+            if (seqMsg.ack) {
+              context.log.trace("Sending Ack seqNr [{}].", seqNr)
+              s.producerController ! Ack(confirmedSeqNr = seqNr)
             }
+            s.requestedSeqNr
+          }
 
-          // FIXME can we use unstashOne instead of all?
-          stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
-        } else {
-          receiveUnexpectedConfirmed(seqNr)
-        }
+        // FIXME can we use unstashOne instead of all?
+        stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
 
       case msg: SequencedMessage[A] =>
         if (msg.seqNr == seqMsg.seqNr && msg.producer == seqMsg.producer) {
@@ -428,7 +422,7 @@ private class ConsumerControllerImpl[A](
         receiveRetry(s, () => waitingForConfirmation(retryRequest(s), seqMsg))
 
       case start: Start[A] =>
-        start.deliverTo ! Delivery(seqMsg.producerId, seqMsg.seqNr, seqMsg.msg, context.self)
+        start.deliverTo ! Delivery(seqMsg.msg, context.self, seqMsg.producerId, seqMsg.seqNr)
         receiveStart(s, start, newState => waitingForConfirmation(newState, seqMsg))
 
       case ConsumerTerminated(c) =>
@@ -487,8 +481,8 @@ private class ConsumerControllerImpl[A](
     Behaviors.stopped
   }
 
-  private def receiveUnexpectedConfirmed(seqNr: SeqNr): Behavior[InternalCommand] = {
-    context.log.warn("Received unexpected Confirmed [{}] from consumer.", seqNr)
+  private def receiveUnexpectedConfirmed(): Behavior[InternalCommand] = {
+    context.log.warn("Received unexpected Confirmed from consumer.")
     Behaviors.unhandled
   }
 

@@ -30,7 +30,6 @@ object ShardingDocExample {
   }
 
   object TodoList {
-    import ConsumerController.SeqNr
 
     sealed trait Command
 
@@ -38,14 +37,10 @@ object ShardingDocExample {
     final case class CompleteTask(item: String) extends Command
 
     private final case class InitialState(state: State) extends Command
-    private final case class SaveSuccess(seqNr: SeqNr, confirmTo: ActorRef[ConsumerController.Confirmed])
-        extends Command
+    private final case class SaveSuccess(confirmTo: ActorRef[ConsumerController.Confirmed]) extends Command
     private final case class DBError(cause: Throwable) extends Command
 
-    private final case class CommandDelivery(
-        command: Command,
-        seqNr: SeqNr,
-        confirmTo: ActorRef[ConsumerController.Confirmed])
+    private final case class CommandDelivery(command: Command, confirmTo: ActorRef[ConsumerController.Confirmed])
         extends Command
 
     final case class State(tasks: Vector[String])
@@ -62,7 +57,6 @@ object ShardingDocExample {
   }
 
   class TodoList(context: ActorContext[TodoList.Command], id: String, db: DB) {
-    import ConsumerController.SeqNr
     import TodoList._
 
     private def start(shardingConsumerController: ActorRef[ConsumerController.Start[Command]]): Behavior[Command] = {
@@ -74,7 +68,7 @@ object ShardingDocExample {
       Behaviors.receiveMessagePartial {
         case InitialState(state) =>
           val deliveryAdapter: ActorRef[ConsumerController.Delivery[Command]] = context.messageAdapter { delivery =>
-            CommandDelivery(delivery.msg, delivery.seqNr, delivery.confirmTo)
+            CommandDelivery(delivery.message, delivery.confirmTo)
           }
           shardingConsumerController ! ConsumerController.Start(deliveryAdapter)
           active(state)
@@ -85,25 +79,25 @@ object ShardingDocExample {
 
     private def active(state: State): Behavior[Command] = {
       Behaviors.receiveMessagePartial {
-        case CommandDelivery(AddTask(item), seqNr, confirmTo) =>
+        case CommandDelivery(AddTask(item), confirmTo) =>
           val newState = state.copy(tasks = state.tasks :+ item)
-          save(newState, seqNr, confirmTo)
+          save(newState, confirmTo)
           active(newState)
-        case CommandDelivery(CompleteTask(item), seqNr, confirmTo) =>
+        case CommandDelivery(CompleteTask(item), confirmTo) =>
           val newState = state.copy(tasks = state.tasks.filterNot(_ == item))
-          save(newState, seqNr, confirmTo)
+          save(newState, confirmTo)
           active(newState)
-        case SaveSuccess(seqNr, confirmTo) =>
-          confirmTo ! ConsumerController.Confirmed(seqNr)
+        case SaveSuccess(confirmTo) =>
+          confirmTo ! ConsumerController.Confirmed
           Behaviors.same
         case DBError(cause) =>
           throw cause
       }
     }
 
-    private def save(newState: State, seqNr: SeqNr, confirmTo: ActorRef[ConsumerController.Confirmed]): Unit = {
+    private def save(newState: State, confirmTo: ActorRef[ConsumerController.Confirmed]): Unit = {
       context.pipeToSelf(db.save(id, newState)) {
-        case Success(_)     => SaveSuccess(seqNr, confirmTo)
+        case Success(_)     => SaveSuccess(confirmTo)
         case Failure(cause) => DBError(cause)
       }
     }

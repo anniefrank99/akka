@@ -20,16 +20,16 @@ object TestConsumer {
   final case class Job(payload: String)
   sealed trait Command
   final case class JobDelivery(
-      producerId: String,
-      seqNr: Long,
       msg: Job,
-      confirmTo: ActorRef[ConsumerController.Confirmed])
+      confirmTo: ActorRef[ConsumerController.Confirmed],
+      producerId: String,
+      seqNr: Long)
       extends Command
   final case class SomeAsyncJob(
-      producerId: String,
-      seqNr: Long,
       msg: Job,
-      confirmTo: ActorRef[ConsumerController.Confirmed])
+      confirmTo: ActorRef[ConsumerController.Confirmed],
+      producerId: String,
+      seqNr: Long)
       extends Command
 
   final case class CollectedProducerIds(producerIds: Set[String])
@@ -46,7 +46,7 @@ object TestConsumer {
   }
 
   def consumerEndCondition(seqNr: Long): TestConsumer.SomeAsyncJob => Boolean = {
-    case TestConsumer.SomeAsyncJob(_, nr, _, _) => nr >= seqNr
+    case TestConsumer.SomeAsyncJob(_, _, _, nr) => nr >= seqNr
   }
 
   def apply(
@@ -78,23 +78,23 @@ class TestConsumer(
   ctx.setLoggerName("TestConsumer")
 
   private val deliverTo: ActorRef[ConsumerController.Delivery[Job]] =
-    ctx.messageAdapter(d => JobDelivery(d.producerId, d.seqNr, d.msg, d.confirmTo))
+    ctx.messageAdapter(d => JobDelivery(d.message, d.confirmTo, d.producerId, d.seqNr))
 
   controller ! ConsumerController.Start(deliverTo)
 
   private def active(processed: Set[(String, Long)]): Behavior[Command] = {
     Behaviors.receive { (ctx, m) =>
       m match {
-        case JobDelivery(producerId, seqNr, msg, confirmTo) =>
+        case JobDelivery(msg, confirmTo, producerId, seqNr) =>
           // confirmation can be later, asynchronously
           if (delay == Duration.Zero)
-            ctx.self ! SomeAsyncJob(producerId, seqNr, msg, confirmTo)
+            ctx.self ! SomeAsyncJob(msg, confirmTo, producerId, seqNr)
           else
             // schedule to simulate slow consumer
-            ctx.scheduleOnce(10.millis, ctx.self, SomeAsyncJob(producerId, seqNr, msg, confirmTo))
+            ctx.scheduleOnce(10.millis, ctx.self, SomeAsyncJob(msg, confirmTo, producerId, seqNr))
           Behaviors.same
 
-        case job @ SomeAsyncJob(producerId, seqNr, _, confirmTo) =>
+        case job @ SomeAsyncJob(_, confirmTo, producerId, seqNr) =>
           // when replacing producer the seqNr may start from 1 again
           val cleanProcessed =
             if (seqNr == 1L) processed.filterNot { case (pid, _) => pid == producerId } else processed
@@ -102,7 +102,7 @@ class TestConsumer(
           if (cleanProcessed((producerId, seqNr)))
             throw new RuntimeException(s"Received duplicate [($producerId,$seqNr)]")
           ctx.log.info("processed [{}] from [{}]", seqNr, producerId)
-          confirmTo ! ConsumerController.Confirmed(seqNr)
+          confirmTo ! ConsumerController.Confirmed
 
           if (endCondition(job)) {
             endReplyTo ! CollectedProducerIds(processed.map(_._1))
