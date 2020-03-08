@@ -39,6 +39,9 @@ import com.typesafe.config.Config
  *
  * The consumer and the `ConsumerController` actors are supposed to be local so that these messages are fast
  * and not lost.
+ *
+ * The `ConsumerController` is automatically stopped when the consumer that registered with the `Start`
+ * message is terminated.
  */
 @ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object ConsumerController {
@@ -115,7 +118,7 @@ object ConsumerController {
       extends Command[A]
       with DeliverySerializable
 
-  // FIXME can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.
+  // TODO can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.
 
   object Settings {
 

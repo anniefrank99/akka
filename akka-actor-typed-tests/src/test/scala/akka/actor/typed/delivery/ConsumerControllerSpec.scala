@@ -458,6 +458,31 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       testKit.stop(consumerController)
     }
+
+    "send Ack when stopped" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
+
+      val consumerProbe1 = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe1.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      producerControllerProbe.expectMessageType[ProducerControllerImpl.Request]
+      consumerController ! ConsumerController.Confirmed
+      producerControllerProbe.expectMessageType[ProducerControllerImpl.Request]
+
+      consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
+      consumerProbe1.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      consumerController ! ConsumerController.Confirmed
+
+      testKit.stop(consumerController)
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(2L))
+    }
   }
 
   "ConsumerController without resending" must {

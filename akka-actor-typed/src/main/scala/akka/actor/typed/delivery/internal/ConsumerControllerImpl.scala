@@ -6,6 +6,7 @@ package akka.actor.typed.delivery.internal
 
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
+import akka.actor.typed.PostStop
 import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.receptionist.Receptionist
@@ -203,63 +204,67 @@ private class ConsumerControllerImpl[A](
   // Expecting a SequencedMessage from ProducerController, that will be delivered to the consumer if
   // the seqNr is right.
   private def active(s: State[A]): Behavior[InternalCommand] = {
-    Behaviors.receiveMessage {
-      case seqMsg: SequencedMessage[A] =>
-        val pid = seqMsg.producerId
-        val seqNr = seqMsg.seqNr
-        val expectedSeqNr = s.receivedSeqNr + 1
+    Behaviors
+      .receiveMessage[InternalCommand] {
+        case seqMsg: SequencedMessage[A] =>
+          val pid = seqMsg.producerId
+          val seqNr = seqMsg.seqNr
+          val expectedSeqNr = s.receivedSeqNr + 1
 
-        if (s.isProducerChanged(seqMsg)) {
-          if (seqMsg.first)
-            context.log.trace("Received first SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
-          receiveChangedProducer(s, seqMsg)
-        } else if (s.registering.isDefined) {
-          context.log.debug(
-            "Received SequencedMessage seqNr [{}], discarding message because registering to new ProducerController.",
-            seqNr)
-          Behaviors.same
-        } else if (s.isNextExpected(seqMsg)) {
-          context.log.trace("Received SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
-          deliver(s.copy(receivedSeqNr = seqNr), seqMsg)
-        } else if (seqNr > expectedSeqNr) {
-          context.log.debugN(
-            "Received SequencedMessage seqNr [{}], but expected [{}], {}.",
-            seqNr,
-            expectedSeqNr,
-            if (resendLost) "requesting resend from expected seqNr" else "delivering to consumer anyway")
-          if (resendLost) {
-            seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
-            resending(s)
-          } else {
-            s.consumer ! Delivery(seqMsg.message, context.self, pid, seqNr)
-            waitingForConfirmation(s.copy(receivedSeqNr = seqNr), seqMsg)
+          if (s.isProducerChanged(seqMsg)) {
+            if (seqMsg.first)
+              context.log.trace("Received first SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
+            receiveChangedProducer(s, seqMsg)
+          } else if (s.registering.isDefined) {
+            context.log.debug(
+              "Received SequencedMessage seqNr [{}], discarding message because registering to new ProducerController.",
+              seqNr)
+            Behaviors.same
+          } else if (s.isNextExpected(seqMsg)) {
+            context.log.trace("Received SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
+            deliver(s.copy(receivedSeqNr = seqNr), seqMsg)
+          } else if (seqNr > expectedSeqNr) {
+            context.log.debugN(
+              "Received SequencedMessage seqNr [{}], but expected [{}], {}.",
+              seqNr,
+              expectedSeqNr,
+              if (resendLost) "requesting resend from expected seqNr" else "delivering to consumer anyway")
+            if (resendLost) {
+              seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
+              resending(s)
+            } else {
+              s.consumer ! Delivery(seqMsg.message, context.self, pid, seqNr)
+              waitingForConfirmation(s.copy(receivedSeqNr = seqNr), seqMsg)
+            }
+          } else { // seqNr < expectedSeqNr
+            context.log.debugN("Received duplicate SequencedMessage seqNr [{}], expected [{}].", seqNr, expectedSeqNr)
+            if (seqMsg.first)
+              active(retryRequest(s))
+            else
+              active(s)
           }
-        } else { // seqNr < expectedSeqNr
-          context.log.debugN("Received duplicate SequencedMessage seqNr [{}], expected [{}].", seqNr, expectedSeqNr)
-          if (seqMsg.first)
-            active(retryRequest(s))
-          else
-            active(s)
-        }
 
-      case Retry =>
-        receiveRetry(s, () => active(retryRequest(s)))
+        case Retry =>
+          receiveRetry(s, () => active(retryRequest(s)))
 
-      case Confirmed =>
-        receiveUnexpectedConfirmed()
+        case Confirmed =>
+          receiveUnexpectedConfirmed()
 
-      case start: Start[A] =>
-        receiveStart(s, start, newState => active(newState))
+        case start: Start[A] =>
+          receiveStart(s, start, newState => active(newState))
 
-      case ConsumerTerminated(c) =>
-        receiveConsumerTerminated(c)
+        case ConsumerTerminated(c) =>
+          receiveConsumerTerminated(c)
 
-      case reg: RegisterToProducerController[A] =>
-        receiveRegisterToProducerController(s, reg, newState => active(newState))
+        case reg: RegisterToProducerController[A] =>
+          receiveRegisterToProducerController(s, reg, newState => active(newState))
 
-      case _: UnsealedInternalCommand =>
-        Behaviors.unhandled
-    }
+        case _: UnsealedInternalCommand =>
+          Behaviors.unhandled
+      }
+      .receiveSignal {
+        case (_, PostStop) => postStop(s)
+      }
   }
 
   private def receiveChangedProducer(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
@@ -307,55 +312,61 @@ private class ConsumerControllerImpl[A](
   // ProducerController with the missing seqNr. Other SequencedMessage with different seqNr will be
   // discarded since they were in flight before the Resend request and will anyway be sent again.
   private def resending(s: State[A]): Behavior[InternalCommand] = {
-    Behaviors.receiveMessage {
-      case seqMsg: SequencedMessage[A] =>
-        val seqNr = seqMsg.seqNr
+    Behaviors
+      .receiveMessage[InternalCommand] {
+        case seqMsg: SequencedMessage[A] =>
+          val seqNr = seqMsg.seqNr
 
-        if (s.isProducerChanged(seqMsg)) {
-          if (seqMsg.first)
-            context.log.trace("Received first SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
-          receiveChangedProducer(s, seqMsg)
-        } else if (s.registering.isDefined) {
-          context.log.debug(
-            "Received SequencedMessage seqNr [{}], discarding message because registering to new ProducerController.",
-            seqNr)
-          Behaviors.same
-        } else if (s.isNextExpected(seqMsg)) {
-          context.log.debug("Received missing SequencedMessage seqNr [{}].", seqNr)
-          deliver(s.copy(receivedSeqNr = seqNr), seqMsg)
-        } else {
-          context.log.debug2(
-            "Received SequencedMessage seqNr [{}], discarding message because waiting for [{}].",
-            seqNr,
-            s.receivedSeqNr + 1)
-          if (seqMsg.first)
-            retryRequest(s)
-          Behaviors.same // ignore until we receive the expected
-        }
+          if (s.isProducerChanged(seqMsg)) {
+            if (seqMsg.first)
+              context.log.trace("Received first SequencedMessage seqNr [{}], delivering to consumer.", seqNr)
+            receiveChangedProducer(s, seqMsg)
+          } else if (s.registering.isDefined) {
+            context.log.debug(
+              "Received SequencedMessage seqNr [{}], discarding message because registering to new ProducerController.",
+              seqNr)
+            Behaviors.same
+          } else if (s.isNextExpected(seqMsg)) {
+            context.log.debug("Received missing SequencedMessage seqNr [{}].", seqNr)
+            deliver(s.copy(receivedSeqNr = seqNr), seqMsg)
+          } else {
+            context.log.debug2(
+              "Received SequencedMessage seqNr [{}], discarding message because waiting for [{}].",
+              seqNr,
+              s.receivedSeqNr + 1)
+            if (seqMsg.first)
+              retryRequest(s)
+            Behaviors.same // ignore until we receive the expected
+          }
 
-      case Retry =>
-        receiveRetry(s, () => {
-          // in case the Resend message was lost
-          context.log.debug("Retry sending Resend [{}].", s.receivedSeqNr + 1)
-          s.producerController ! Resend(fromSeqNr = s.receivedSeqNr + 1)
-          Behaviors.same
-        })
+        case Retry =>
+          receiveRetry(
+            s,
+            () => {
+              // in case the Resend message was lost
+              context.log.debug("Retry sending Resend [{}].", s.receivedSeqNr + 1)
+              s.producerController ! Resend(fromSeqNr = s.receivedSeqNr + 1)
+              Behaviors.same
+            })
 
-      case Confirmed =>
-        receiveUnexpectedConfirmed()
+        case Confirmed =>
+          receiveUnexpectedConfirmed()
 
-      case start: Start[A] =>
-        receiveStart(s, start, newState => resending(newState))
+        case start: Start[A] =>
+          receiveStart(s, start, newState => resending(newState))
 
-      case ConsumerTerminated(c) =>
-        receiveConsumerTerminated(c)
+        case ConsumerTerminated(c) =>
+          receiveConsumerTerminated(c)
 
-      case reg: RegisterToProducerController[A] =>
-        receiveRegisterToProducerController(s, reg, newState => active(newState))
+        case reg: RegisterToProducerController[A] =>
+          receiveRegisterToProducerController(s, reg, newState => active(newState))
 
-      case _: UnsealedInternalCommand =>
-        Behaviors.unhandled
-    }
+        case _: UnsealedInternalCommand =>
+          Behaviors.unhandled
+      }
+      .receiveSignal {
+        case (_, PostStop) => postStop(s)
+      }
   }
 
   private def deliver(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
@@ -366,74 +377,79 @@ private class ConsumerControllerImpl[A](
   // The message has been delivered to the consumer and it is now waiting for Confirmed from
   // the consumer. New SequencedMessage from the ProducerController will be stashed.
   private def waitingForConfirmation(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
-    Behaviors.receiveMessage {
-      case Confirmed =>
-        val seqNr = seqMsg.seqNr
-        context.log.trace("Received Confirmed seqNr [{}] from consumer, stashed size [{}].", seqNr, stashBuffer.size)
+    Behaviors
+      .receiveMessage[InternalCommand] {
+        case Confirmed =>
+          val seqNr = seqMsg.seqNr
+          context.log.trace("Received Confirmed seqNr [{}] from consumer, stashed size [{}].", seqNr, stashBuffer.size)
 
-        val newRequestedSeqNr =
-          if (seqMsg.first) {
-            // confirm the first message immediately to cancel resending of first
-            val newRequestedSeqNr = seqNr - 1 + flowControlWindow
-            context.log.debug(
-              "Sending Request after first with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
-              seqNr,
-              newRequestedSeqNr)
-            s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
-            newRequestedSeqNr
-          } else if ((s.requestedSeqNr - seqNr) == flowControlWindow / 2) {
-            val newRequestedSeqNr = s.requestedSeqNr + flowControlWindow / 2
-            context.log.debug(
-              "Sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
-              seqNr,
-              newRequestedSeqNr)
-            s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
-            startRetryTimer() // reset interval since Request was just sent
-            newRequestedSeqNr
-          } else {
-            if (seqMsg.ack) {
-              context.log.trace("Sending Ack seqNr [{}].", seqNr)
-              s.producerController ! Ack(confirmedSeqNr = seqNr)
+          val newRequestedSeqNr =
+            if (seqMsg.first) {
+              // confirm the first message immediately to cancel resending of first
+              val newRequestedSeqNr = seqNr - 1 + flowControlWindow
+              context.log.debug(
+                "Sending Request after first with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
+                seqNr,
+                newRequestedSeqNr)
+              s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
+              newRequestedSeqNr
+            } else if ((s.requestedSeqNr - seqNr) == flowControlWindow / 2) {
+              val newRequestedSeqNr = s.requestedSeqNr + flowControlWindow / 2
+              context.log.debug(
+                "Sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
+                seqNr,
+                newRequestedSeqNr)
+              s.producerController ! Request(confirmedSeqNr = seqNr, newRequestedSeqNr, resendLost, viaTimeout = false)
+              startRetryTimer() // reset interval since Request was just sent
+              newRequestedSeqNr
+            } else {
+              if (seqMsg.ack) {
+                context.log.trace("Sending Ack seqNr [{}].", seqNr)
+                s.producerController ! Ack(confirmedSeqNr = seqNr)
+              }
+              s.requestedSeqNr
             }
-            s.requestedSeqNr
+
+          // FIXME can we use unstashOne instead of all?
+          stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
+
+        case msg: SequencedMessage[A] =>
+          if (msg.seqNr == seqMsg.seqNr && msg.producer == seqMsg.producer) {
+            context.log.debug("Received duplicate SequencedMessage seqNr [{}].", msg.seqNr)
+          } else if (stashBuffer.isFull) {
+            // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
+            // dropping them since they can be resent
+            context.log.debug(
+              "Received SequencedMessage seqNr [{}], discarding message because stash is full.",
+              msg.seqNr)
+          } else {
+            context.log.trace(
+              "Received SequencedMessage seqNr [{}], stashing while waiting for consumer to confirm [{}].",
+              msg.seqNr,
+              seqMsg.seqNr)
+            stashBuffer.stash(msg)
           }
+          Behaviors.same
 
-        // FIXME can we use unstashOne instead of all?
-        stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
+        case Retry =>
+          receiveRetry(s, () => waitingForConfirmation(retryRequest(s), seqMsg))
 
-      case msg: SequencedMessage[A] =>
-        if (msg.seqNr == seqMsg.seqNr && msg.producer == seqMsg.producer) {
-          context.log.debug("Received duplicate SequencedMessage seqNr [{}].", msg.seqNr)
-        } else if (stashBuffer.isFull) {
-          // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
-          // dropping them since they can be resent
-          context.log
-            .debug("Received SequencedMessage seqNr [{}], discarding message because stash is full.", msg.seqNr)
-        } else {
-          context.log.trace(
-            "Received SequencedMessage seqNr [{}], stashing while waiting for consumer to confirm [{}].",
-            msg.seqNr,
-            seqMsg.seqNr)
-          stashBuffer.stash(msg)
-        }
-        Behaviors.same
+        case start: Start[A] =>
+          start.deliverTo ! Delivery(seqMsg.message, context.self, seqMsg.producerId, seqMsg.seqNr)
+          receiveStart(s, start, newState => waitingForConfirmation(newState, seqMsg))
 
-      case Retry =>
-        receiveRetry(s, () => waitingForConfirmation(retryRequest(s), seqMsg))
+        case ConsumerTerminated(c) =>
+          receiveConsumerTerminated(c)
 
-      case start: Start[A] =>
-        start.deliverTo ! Delivery(seqMsg.message, context.self, seqMsg.producerId, seqMsg.seqNr)
-        receiveStart(s, start, newState => waitingForConfirmation(newState, seqMsg))
+        case reg: RegisterToProducerController[A] =>
+          receiveRegisterToProducerController(s, reg, newState => waitingForConfirmation(newState, seqMsg))
 
-      case ConsumerTerminated(c) =>
-        receiveConsumerTerminated(c)
-
-      case reg: RegisterToProducerController[A] =>
-        receiveRegisterToProducerController(s, reg, newState => waitingForConfirmation(newState, seqMsg))
-
-      case _: UnsealedInternalCommand =>
-        Behaviors.unhandled
-    }
+        case _: UnsealedInternalCommand =>
+          Behaviors.unhandled
+      }
+      .receiveSignal {
+        case (_, PostStop) => postStop(s)
+      }
   }
 
   private def receiveRetry(s: State[A], nextBehavior: () => Behavior[InternalCommand]): Behavior[InternalCommand] = {
@@ -507,6 +523,12 @@ private class ConsumerControllerImpl[A](
       s.producerController ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
       s.copy(requestedSeqNr = newRequestedSeqNr)
     }
+  }
+
+  private def postStop(s: State[A]): Behavior[InternalCommand] = {
+    // best effort to Ack latest confirmed when stopping
+    s.producerController ! Ack(s.confirmedSeqNr)
+    Behaviors.same
   }
 
 }
