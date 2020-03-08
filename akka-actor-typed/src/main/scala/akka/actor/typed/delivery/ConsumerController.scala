@@ -109,7 +109,7 @@ object ConsumerController {
    * application code but is public because it's possible to wrap it or send it in other ways when
    * building higher level abstractions that are using the `ProducerController`.
    */
-  final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, msg: A, first: Boolean, ack: Boolean)(
+  final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, message: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
       @InternalApi private[akka] val producer: ActorRef[ProducerControllerImpl.InternalCommand])
       extends Command[A]

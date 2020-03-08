@@ -89,15 +89,17 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
+      seqMsg1.message should ===(TestConsumer.Job("msg-1"))
       seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
-      workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
-        TestConsumer.Job("msg-2"))
+      workerController1Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-2"))
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
-      workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
-        TestConsumer.Job("msg-3"))
+      workerController1Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-3"))
 
       val workerController2Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
       system.receptionist ! Receptionist.Register(workerServiceKey, workerController2Probe.ref)
@@ -108,16 +110,18 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
 
       // msg-2 and msg3 were not confirmed and should be resent to another worker
       val seqMsg2 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg2.msg should ===(TestConsumer.Job("msg-2"))
+      seqMsg2.message should ===(TestConsumer.Job("msg-2"))
       seqMsg2.seqNr should ===(1)
       seqMsg2.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
 
-      workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
-        TestConsumer.Job("msg-3"))
+      workerController2Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-3"))
 
       producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
-      workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
-        TestConsumer.Job("msg-4"))
+      workerController2Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-4"))
 
       workerController2Probe.stop()
       awaitWorkersRegistered(workPullingController, 0)
@@ -141,14 +145,14 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       val replyProbe = createTestProbe[Done]()
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-1"), replyProbe.ref)
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg1.msg should ===(TestConsumer.Job("msg-1"))
+      seqMsg1.message should ===(TestConsumer.Job("msg-1"))
       seqMsg1.ack should ===(true)
       seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
       producerProbe.receiveMessage().askNextTo ! MessageWithConfirmation(TestConsumer.Job("msg-2"), replyProbe.ref)
       val seqMsg2 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg2.msg should ===(TestConsumer.Job("msg-2"))
+      seqMsg2.message should ===(TestConsumer.Job("msg-2"))
       seqMsg2.ack should ===(true)
       // no reply until ack
       replyProbe.expectNoMessage()
@@ -205,13 +209,14 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
 
       // msg-3 and msg-4 were not confirmed and should be resent to another worker
       val seqMsg3 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
-      seqMsg3.msg should ===(TestConsumer.Job("msg-3"))
+      seqMsg3.message should ===(TestConsumer.Job("msg-3"))
       seqMsg3.seqNr should ===(1)
       seqMsg3.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
       replyProbe.receiveMessage()
 
-      workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]].msg should ===(
-        TestConsumer.Job("msg-4"))
+      workerController2Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-4"))
       seqMsg3.producer ! ProducerControllerImpl.Ack(2L)
       replyProbe.receiveMessage()
 

@@ -231,7 +231,7 @@ private class ConsumerControllerImpl[A](
             seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
             resending(s)
           } else {
-            s.consumer ! Delivery(seqMsg.msg, context.self, pid, seqNr)
+            s.consumer ! Delivery(seqMsg.message, context.self, pid, seqNr)
             waitingForConfirmation(s.copy(receivedSeqNr = seqNr), seqMsg)
           }
         } else { // seqNr < expectedSeqNr
@@ -359,7 +359,7 @@ private class ConsumerControllerImpl[A](
   }
 
   private def deliver(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
-    s.consumer ! Delivery(seqMsg.msg, context.self, seqMsg.producerId, seqMsg.seqNr)
+    s.consumer ! Delivery(seqMsg.message, context.self, seqMsg.producerId, seqMsg.seqNr)
     waitingForConfirmation(s, seqMsg)
   }
 
@@ -422,7 +422,7 @@ private class ConsumerControllerImpl[A](
         receiveRetry(s, () => waitingForConfirmation(retryRequest(s), seqMsg))
 
       case start: Start[A] =>
-        start.deliverTo ! Delivery(seqMsg.msg, context.self, seqMsg.producerId, seqMsg.seqNr)
+        start.deliverTo ! Delivery(seqMsg.message, context.self, seqMsg.producerId, seqMsg.seqNr)
         receiveStart(s, start, newState => waitingForConfirmation(newState, seqMsg))
 
       case ConsumerTerminated(c) =>

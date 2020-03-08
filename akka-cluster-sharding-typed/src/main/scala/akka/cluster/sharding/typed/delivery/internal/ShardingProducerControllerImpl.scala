@@ -135,7 +135,7 @@ import akka.util.Timeout
       Behaviors.withStash[InternalCommand](settings.bufferSize) { newStashBuffer =>
         Behaviors.setup { _ =>
           s.unconfirmed.foreach { m =>
-            newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.msg), alreadyStored = m.seqNr))
+            newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.message), alreadyStored = m.seqNr))
           }
           // append other stashed messages after the unconfirmed
           stashBuffer.foreach(newStashBuffer.stash)

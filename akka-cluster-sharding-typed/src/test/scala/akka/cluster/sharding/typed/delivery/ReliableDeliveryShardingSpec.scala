@@ -237,7 +237,7 @@ class ReliableDeliveryShardingSpec
       producerProbe.expectNoMessage()
 
       val seq1 = shardingProbe.receiveMessage().message
-      seq1.msg should ===(TestConsumer.Job("msg-1"))
+      seq1.message should ===(TestConsumer.Job("msg-1"))
       seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next2 = producerProbe.receiveMessage()
@@ -270,7 +270,7 @@ class ReliableDeliveryShardingSpec
       shardingProbe.receiveMessage()
       shardingProbe.receiveMessage()
       val seq5 = shardingProbe.receiveMessage().message
-      seq5.msg should ===(TestConsumer.Job("msg-5"))
+      seq5.message should ===(TestConsumer.Job("msg-5"))
 
       val next6 = producerProbe.receiveMessage()
       next6.entitiesWithDemand should ===(Set.empty)
@@ -280,7 +280,7 @@ class ReliableDeliveryShardingSpec
       next6.sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-7"))
       producerProbe.expectNoMessage()
       val seq7 = shardingProbe.receiveMessage().message
-      seq7.msg should ===(TestConsumer.Job("msg-7"))
+      seq7.message should ===(TestConsumer.Job("msg-7"))
       seq7.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next8 = producerProbe.receiveMessage()
@@ -290,7 +290,7 @@ class ReliableDeliveryShardingSpec
       // when new demand the buffered messages will be be sent
       seq5.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, requestUpToSeqNr = 10, true, false)
       val seq6 = shardingProbe.receiveMessage().message
-      seq6.msg should ===(TestConsumer.Job("msg-6"))
+      seq6.message should ===(TestConsumer.Job("msg-6"))
 
       val next9 = producerProbe.receiveMessage()
       next9.entitiesWithDemand should ===(Set("entity-1", "entity-2"))

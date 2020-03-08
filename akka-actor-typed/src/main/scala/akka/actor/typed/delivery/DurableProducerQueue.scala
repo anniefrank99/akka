@@ -73,7 +73,7 @@ object DurableProducerQueue {
   /**
    * The fact (event) that a message has been sent.
    */
-  final case class MessageSent[A](seqNr: SeqNr, msg: A, ack: Boolean, confirmationQualifier: ConfirmationQualifier)
+  final case class MessageSent[A](seqNr: SeqNr, message: A, ack: Boolean, confirmationQualifier: ConfirmationQualifier)
       extends Event
 
   /**

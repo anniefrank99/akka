@@ -216,7 +216,7 @@ object ProducerControllerImpl {
       producer: ActorRef[RequestNext[A]],
       loadedState: DurableProducerQueue.State[A]): State[A] = {
     val unconfirmed = loadedState.unconfirmed.toVector.zipWithIndex.map {
-      case (u, i) => SequencedMessage[A](producerId, u.seqNr, u.msg, i == 0, u.ack)(self)
+      case (u, i) => SequencedMessage[A](producerId, u.seqNr, u.message, i == 0, u.ack)(self)
     }
     State(
       requested = false,
@@ -291,19 +291,19 @@ object ProducerControllerImpl {
       settings: ProducerController.Settings,
       state: State[A]): Behavior[InternalCommand] = {
 
-    Behaviors.setup { ctx =>
+    Behaviors.setup { context =>
       Behaviors.withTimers { timers =>
-        val msgAdapter: ActorRef[A] = ctx.messageAdapter(msg => Msg(msg))
+        val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg))
         val requested =
           if (state.unconfirmed.isEmpty) {
-            state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, ctx.self)
+            state.producer ! RequestNext(producerId, 1L, 0L, msgAdapter, context.self)
             true
           } else {
-            ctx.log.debug("Starting with [{}] unconfirmed.", state.unconfirmed.size)
-            ctx.self ! ResendFirst
+            context.log.debug("Starting with [{}] unconfirmed.", state.unconfirmed.size)
+            context.self ! ResendFirst
             false
           }
-        new ProducerControllerImpl[A](ctx, producerId, durableQueue, settings, msgAdapter, timers)
+        new ProducerControllerImpl[A](context, producerId, durableQueue, settings, msgAdapter, timers)
           .active(state.copy(requested = requested))
       }
     }
