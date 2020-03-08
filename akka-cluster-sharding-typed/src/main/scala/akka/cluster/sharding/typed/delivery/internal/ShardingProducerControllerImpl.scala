@@ -6,7 +6,6 @@ package akka.cluster.sharding.typed.delivery.internal
 
 import java.util.concurrent.TimeoutException
 
-import scala.concurrent.duration._
 import scala.reflect.ClassTag
 import scala.util.Failure
 import scala.util.Success
@@ -49,6 +48,7 @@ import akka.util.Timeout
   private type OutKey = String
 
   private final case class Ack(outKey: OutKey, confirmedSeqNr: OutSeqNr) extends InternalCommand
+  private final case class AskTimeout(outKey: OutKey, outSeqNr: OutSeqNr) extends InternalCommand
 
   private final case class WrappedRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
@@ -260,11 +260,8 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   import ShardingProducerController.RequestNext
   import ShardingProducerControllerImpl._
 
-  // for the durableQueue StoreMessageSent ask
-  private implicit val askTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
-
-  // not important since actual producer ask will have it's own timeout
-  private val sendTimeout: Timeout = 60.seconds
+  private val durableQueueAskTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
+  private val entityAskTimeout: Timeout = settings.internalAskTimeout
 
   private val requestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WrappedRequestNext.apply)
@@ -453,6 +450,13 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       case w: WrappedRequestNext[A] =>
         receiveWrappedRequestNext(w)
 
+      case AskTimeout(outKey, outSeqNr) =>
+        context.log.debug(
+          "Message seqNr [{}] sent to entity [{}] timed out. It will be be redelivered.",
+          outSeqNr,
+          outKey)
+        Behaviors.same
+
       case DurableQueueTerminated =>
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
@@ -471,7 +475,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   private def send(msg: A, outKey: OutKey, outSeqNr: OutSeqNr, nextTo: ProducerController.RequestNext[A]): Unit = {
     if (context.log.isTraceEnabled)
       context.log.trace("Sending [{}] with outSeqNr [{}].", msg.getClass.getName, outSeqNr)
-    implicit val askTimeout: Timeout = sendTimeout
+    implicit val askTimeout: Timeout = entityAskTimeout
     context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
       nextTo.askNextTo,
       ProducerController.MessageWithConfirmation(msg, _)) {
@@ -479,12 +483,13 @@ private class ShardingProducerControllerImpl[A: ClassTag](
         if (seqNr != outSeqNr)
           context.log.error("Inconsistent Ack seqNr [{}] != [{}]", seqNr, outSeqNr)
         Ack(outKey, seqNr)
-      case Failure(exc) =>
-        throw exc // FIXME what to do for AskTimeout? can probably be ignored since actual producer ask will have it's own timeout
+      case Failure(_) =>
+        AskTimeout(outKey, outSeqNr)
     }
   }
 
   private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
+    implicit val askTimeout: Timeout = durableQueueAskTimeout
     context.ask[StoreMessageSent[A], StoreMessageSentAck](
       durableQueue.get,
       askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {

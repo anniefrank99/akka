@@ -8,6 +8,7 @@ import java.util.Optional
 
 import scala.reflect.ClassTag
 import scala.compat.java8.OptionConverters._
+import scala.concurrent.duration.FiniteDuration
 
 import akka.Done
 import akka.actor.typed.ActorRef
@@ -17,6 +18,7 @@ import akka.actor.typed.delivery.internal.WorkPullingProducerControllerImpl
 import akka.actor.typed.receptionist.ServiceKey
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.ApiMayChange
+import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
 
 /**
@@ -135,7 +137,10 @@ object WorkPullingProducerController {
      * `akka.reliable-delivery.work-pulling.producer-controller`.
      */
     def apply(config: Config): Settings = {
-      new Settings(bufferSize = config.getInt("buffer-size"), ProducerController.Settings(config))
+      new Settings(
+        bufferSize = config.getInt("buffer-size"),
+        config.getDuration("internal-ask-timeout").asScala,
+        ProducerController.Settings(config))
     }
 
     /**
@@ -153,10 +158,19 @@ object WorkPullingProducerController {
       apply(config)
   }
 
-  final class Settings private (val bufferSize: Int, val producerControllerSettings: ProducerController.Settings) {
+  final class Settings private (
+      val bufferSize: Int,
+      val internalAskTimeout: FiniteDuration,
+      val producerControllerSettings: ProducerController.Settings) {
 
     def withBufferSize(newBufferSize: Int): Settings =
       copy(bufferSize = newBufferSize)
+
+    def withInternalAskTimeout(newInternalAskTimeout: FiniteDuration): Settings =
+      copy(internalAskTimeout = newInternalAskTimeout)
+
+    def withInternalAskTimeout(newInternalAskTimeout: java.time.Duration): Settings =
+      copy(internalAskTimeout = newInternalAskTimeout.asScala)
 
     def withProducerControllerSettings(newProducerControllerSettings: ProducerController.Settings): Settings =
       copy(producerControllerSettings = newProducerControllerSettings)
@@ -166,11 +180,12 @@ object WorkPullingProducerController {
      */
     private def copy(
         bufferSize: Int = bufferSize,
+        internalAskTimeout: FiniteDuration = internalAskTimeout,
         producerControllerSettings: ProducerController.Settings = producerControllerSettings) =
-      new Settings(bufferSize, producerControllerSettings)
+      new Settings(bufferSize, internalAskTimeout, producerControllerSettings)
 
     override def toString: String =
-      s"Settings($bufferSize,$producerControllerSettings)"
+      s"Settings($bufferSize,$internalAskTimeout,$producerControllerSettings)"
   }
 
   def apply[A: ClassTag](

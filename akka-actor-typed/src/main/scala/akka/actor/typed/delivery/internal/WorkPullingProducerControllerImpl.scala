@@ -8,7 +8,6 @@ import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeoutException
 
-import scala.concurrent.duration._
 import scala.reflect.ClassTag
 import scala.util.Failure
 import scala.util.Success
@@ -52,6 +51,7 @@ import akka.util.Timeout
   private final case class WorkerRequestNext[A](next: ProducerController.RequestNext[A]) extends InternalCommand
 
   private final case class Ack(outKey: OutKey, confirmedSeqNr: OutSeqNr) extends InternalCommand
+  private final case class AskTimeout(outKey: OutKey, outSeqNr: OutSeqNr) extends InternalCommand
 
   private case object RegisterConsumerDone extends InternalCommand
 
@@ -269,11 +269,8 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
   import WorkPullingProducerController.WorkerStats
   import WorkPullingProducerControllerImpl._
 
-  // for the durableQueue StoreMessageSent ask
-  private implicit val askTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
-
-  // not important since actual producer ask will have it's own timeout
-  private val sendTimeout: Timeout = 60.seconds
+  private val durableQueueAskTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
+  private val workerAskTimeout: Timeout = settings.internalAskTimeout
 
   private val workerRequestNextAdapter: ActorRef[ProducerController.RequestNext[A]] =
     context.messageAdapter(WorkerRequestNext.apply)
@@ -321,12 +318,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
         case Right((outKey, out)) =>
           val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, msg, replyTo)
           val newOut = s.out.updated(outKey, out.copy(unconfirmed = newUnconfirmed, askNextTo = None))
-          implicit val askTimeout: Timeout = sendTimeout
+          implicit val askTimeout: Timeout = workerAskTimeout
           context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
             out.askNextTo.get,
             ProducerController.MessageWithConfirmation(msg, _)) {
             case Success(seqNr) => Ack(outKey, seqNr)
-            case Failure(exc)   => throw exc // FIXME what to do for AskTimeout?
+            case Failure(_)     => AskTimeout(outKey, out.seqNr)
           }
 
           def tellRequestNext(): Unit = {
@@ -605,6 +602,13 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       case RegisterConsumerDone =>
         Behaviors.same
 
+      case AskTimeout(outKey, outSeqNr) =>
+        context.log.debug(
+          "Message seqNr [{}] sent to worker [{}] timed out. It will be be redelivered.",
+          outSeqNr,
+          outKey)
+        Behaviors.same
+
       case DurableQueueTerminated =>
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
@@ -628,6 +632,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
   }
 
   private def storeMessageSent(messageSent: MessageSent[A], attempt: Int): Unit = {
+    implicit val askTimout: Timeout = durableQueueAskTimeout
     context.ask[StoreMessageSent[A], StoreMessageSentAck](
       durableQueue.get,
       askReplyTo => StoreMessageSent(messageSent, askReplyTo)) {
