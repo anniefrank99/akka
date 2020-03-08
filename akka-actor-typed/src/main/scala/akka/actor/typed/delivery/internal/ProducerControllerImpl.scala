@@ -99,6 +99,7 @@ object ProducerControllerImpl {
   private case class StoreMessageSentReply(ack: DurableProducerQueue.StoreMessageSentAck)
   private case class StoreMessageSentFailed[A](messageSent: DurableProducerQueue.MessageSent[A], attempt: Int)
       extends InternalCommand
+  private case object DurableQueueTerminated extends InternalCommand
 
   private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
       extends InternalCommand
@@ -183,7 +184,7 @@ object ProducerControllerImpl {
 
     durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
-      context.watch(ref) // FIXME handle terminated, but it's supposed to be restarted so death pact is alright
+      context.watchWith(ref, DurableQueueTerminated)
       askLoadState(context, Some(ref), settings, attempt = 1)
       ref
     }
@@ -282,6 +283,8 @@ object ProducerControllerImpl {
           askLoadState(context, durableQueue, settings, attempt + 1)
           Behaviors.same
         }
+      case DurableQueueTerminated =>
+        throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
     }
   }
 
@@ -565,6 +568,9 @@ private class ProducerControllerImpl[A: ClassTag](
 
       case RegisterConsumer(consumerController: ActorRef[ConsumerController.Command[A]] @unchecked) =>
         receiveRegisterConsumer(consumerController)
+
+      case DurableQueueTerminated =>
+        throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
     }
   }
 

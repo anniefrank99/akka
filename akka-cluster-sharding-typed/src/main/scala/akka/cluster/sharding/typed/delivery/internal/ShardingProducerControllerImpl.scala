@@ -63,6 +63,7 @@ import akka.util.Timeout
       extends InternalCommand
   private case class StoreMessageSentCompleted[A](messageSent: DurableProducerQueue.MessageSent[A])
       extends InternalCommand
+  private case object DurableQueueTerminated extends InternalCommand
 
   private final case class OutState[A](
       entityId: EntityId,
@@ -202,6 +203,9 @@ import akka.util.Timeout
           Behaviors.same
         }
 
+      case DurableQueueTerminated =>
+        throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
+
       case other =>
         stashBuffer.stash(other)
         Behaviors.same
@@ -215,7 +219,7 @@ import akka.util.Timeout
 
     durableQueueBehavior.map { b =>
       val ref = context.spawn(b, "durable")
-      context.watch(ref) // FIXME handle terminated, but it's not supposed to be restarted so death pact is alright
+      context.watchWith(ref, DurableQueueTerminated)
       askLoadState(context, Some(ref), settings, attempt = 1)
       ref
     }
@@ -448,6 +452,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
       case w: WrappedRequestNext[A] =>
         receiveWrappedRequestNext(w)
+
+      case DurableQueueTerminated =>
+        throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
       // FIXME case Start register of new produce, e.g. restart
     }
