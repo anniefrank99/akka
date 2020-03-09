@@ -52,7 +52,9 @@ object EventSourcedProducerQueue {
         restartMaxBackoff = config.getDuration("restart-max-backoff").asScala,
         snapshotEvery = config.getInt("snapshot-every"),
         keepNSnapshots = config.getInt("keep-n-snapshots"),
-        deleteEvents = config.getBoolean("delete-events"))
+        deleteEvents = config.getBoolean("delete-events"),
+        journalPluginId = config.getString("journal-plugin-id"),
+        snapshotPluginId = config.getString("snapshot-plugin-id"))
     }
 
     /**
@@ -74,9 +76,9 @@ object EventSourcedProducerQueue {
       val restartMaxBackoff: FiniteDuration,
       val snapshotEvery: Int,
       val keepNSnapshots: Int,
-      val deleteEvents: Boolean) {
-
-    // FIXME add journal and snapshot plugin config
+      val deleteEvents: Boolean,
+      val journalPluginId: String,
+      val snapshotPluginId: String) {
 
     def withSnapshotEvery(newSnapshotEvery: Int): Settings =
       copy(snapshotEvery = newSnapshotEvery)
@@ -105,6 +107,12 @@ object EventSourcedProducerQueue {
     def getRestartMaxBackoff(): JavaDuration =
       restartMaxBackoff.asJava
 
+    def withJournalPluginId(id: String): Settings =
+      copy(journalPluginId = id)
+
+    def withSnapshotPluginId(id: String): Settings =
+      copy(snapshotPluginId = id)
+
     /**
      * Private copy method for internal use only.
      */
@@ -112,8 +120,10 @@ object EventSourcedProducerQueue {
         restartMaxBackoff: FiniteDuration = restartMaxBackoff,
         snapshotEvery: Int = snapshotEvery,
         keepNSnapshots: Int = keepNSnapshots,
-        deleteEvents: Boolean = deleteEvents) =
-      new Settings(restartMaxBackoff, snapshotEvery, keepNSnapshots, deleteEvents)
+        deleteEvents: Boolean = deleteEvents,
+        journalPluginId: String = journalPluginId,
+        snapshotPluginId: String = snapshotPluginId) =
+      new Settings(restartMaxBackoff, snapshotEvery, keepNSnapshots, deleteEvents, journalPluginId, snapshotPluginId)
 
     override def toString: String =
       s"Settings($restartMaxBackoff, $snapshotEvery, $keepNSnapshots, $deleteEvents)"
@@ -142,6 +152,8 @@ object EventSourcedProducerQueue {
         (state, command) => impl.onCommand(state, command),
         (state, event) => impl.onEvent(state, event))
         .withRetention(retentionCriteria2)
+        .withJournalPluginId(settings.journalPluginId)
+        .withSnapshotPluginId(settings.snapshotPluginId)
         .onPersistFailure(SupervisorStrategy
           .restartWithBackoff(1.second.min(settings.restartMaxBackoff), settings.restartMaxBackoff, 0.1))
     }
