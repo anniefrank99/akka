@@ -8,6 +8,7 @@ import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.PostStop
 import akka.actor.typed.delivery.ConsumerController
+import akka.actor.typed.delivery.ConsumerController.DeliverThenStop
 import akka.actor.typed.delivery.ProducerController
 import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
@@ -80,7 +81,8 @@ import akka.annotation.InternalApi
       receivedSeqNr: SeqNr,
       confirmedSeqNr: SeqNr,
       requestedSeqNr: SeqNr,
-      registering: Option[ActorRef[ProducerController.Command[A]]]) {
+      registering: Option[ActorRef[ProducerController.Command[A]]],
+      stopping: Boolean) {
 
     def isNextExpected(seqMsg: SequencedMessage[A]): Boolean =
       seqMsg.seqNr == receivedSeqNr + 1
@@ -130,6 +132,14 @@ import akka.annotation.InternalApi
                     stashBuffer.stash(seqMsg)
                     Behaviors.same
 
+                  case DeliverThenStop =>
+                    if (stashBuffer.isEmpty) {
+                      Behaviors.stopped
+                    } else {
+                      stashBuffer.stash(DeliverThenStop)
+                      Behaviors.same
+                    }
+
                   case Retry =>
                     registering.foreach { reg =>
                       context.log.debug("Retry sending RegisterConsumer to [{}].", reg)
@@ -171,7 +181,8 @@ import akka.annotation.InternalApi
       receivedSeqNr = 0,
       confirmedSeqNr = 0,
       requestedSeqNr = 0,
-      registering)
+      registering,
+      stopping = false)
   }
 
   def enforceLocalConsumer(ref: ActorRef[_]): Unit = {
@@ -237,11 +248,11 @@ private class ConsumerControllerImpl[A](
               waitingForConfirmation(s.copy(receivedSeqNr = seqNr), seqMsg)
             }
           } else { // seqNr < expectedSeqNr
-            context.log.debugN("Received duplicate SequencedMessage seqNr [{}], expected [{}].", seqNr, expectedSeqNr)
+            context.log.debug2("Received duplicate SequencedMessage seqNr [{}], expected [{}].", seqNr, expectedSeqNr)
             if (seqMsg.first)
               active(retryRequest(s))
             else
-              active(s)
+              Behaviors.same
           }
 
         case Retry =>
@@ -258,6 +269,9 @@ private class ConsumerControllerImpl[A](
 
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => active(newState))
+
+        case DeliverThenStop =>
+          receiveDeliverThenStop(s, newState => active(newState))
 
         case _: UnsealedInternalCommand =>
           Behaviors.unhandled
@@ -361,6 +375,9 @@ private class ConsumerControllerImpl[A](
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => active(newState))
 
+        case DeliverThenStop =>
+          receiveDeliverThenStop(s, newState => resending(newState))
+
         case _: UnsealedInternalCommand =>
           Behaviors.unhandled
       }
@@ -410,8 +427,16 @@ private class ConsumerControllerImpl[A](
               s.requestedSeqNr
             }
 
-          // FIXME can we use unstashOne instead of all?
-          stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
+          if (s.stopping && stashBuffer.isEmpty) {
+            context.log.debug("Stopped at seqNr [{}], after delivery of buffered messages.", seqNr)
+            Behaviors.stopped { () =>
+              // best effort to Ack latest confirmed when stopping
+              s.producerController ! Ack(seqNr)
+            }
+          } else {
+            // FIXME can we use unstashOne instead of all?
+            stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
+          }
 
         case msg: SequencedMessage[A] =>
           if (msg.seqNr == seqMsg.seqNr && msg.producer == seqMsg.producer) {
@@ -443,6 +468,9 @@ private class ConsumerControllerImpl[A](
 
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => waitingForConfirmation(newState, seqMsg))
+
+        case DeliverThenStop =>
+          receiveDeliverThenStop(s, newState => waitingForConfirmation(newState, seqMsg))
 
         case _: UnsealedInternalCommand =>
           Behaviors.unhandled
@@ -492,6 +520,17 @@ private class ConsumerControllerImpl[A](
     }
   }
 
+  private def receiveDeliverThenStop(
+      s: State[A],
+      nextBehavior: State[A] => Behavior[InternalCommand]): Behavior[InternalCommand] = {
+    if (stashBuffer.isEmpty && s.receivedSeqNr == s.confirmedSeqNr) {
+      context.log.debug("Stopped at seqNr [{}], no buffered messages.", s.confirmedSeqNr)
+      Behaviors.stopped
+    } else {
+      nextBehavior(s.copy(stopping = true))
+    }
+  }
+
   private def receiveConsumerTerminated(c: ActorRef[_]): Behavior[InternalCommand] = {
     context.log.debug("Consumer [{}] terminated.", c)
     Behaviors.stopped
@@ -519,7 +558,7 @@ private class ConsumerControllerImpl[A](
         "Retry sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
         s.confirmedSeqNr,
         newRequestedSeqNr)
-      // FIXME may watch the producer to avoid sending retry Request to dead producer
+      // TODO maybe watch the producer to avoid sending retry Request to dead producer
       s.producerController ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
       s.copy(requestedSeqNr = newRequestedSeqNr)
     }

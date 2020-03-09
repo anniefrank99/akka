@@ -107,6 +107,21 @@ object ConsumerController {
   final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
       extends Command[A]
 
+  @DoNotInherit
+  trait DeliverThenStop extends UnsealedInternalCommand
+
+  /**
+   * Deliver buffered messages and stop when all have been delivered and confirmed.
+   * Additional incoming messages will also be delivered but it will not request any more.
+   */
+  case object DeliverThenStop extends DeliverThenStop {
+
+    /**
+     * Java API: the singleton instance of the DeliverThenStop message
+     */
+    def getInstance: Confirmed = Confirmed
+  }
+
   /**
    * This is used between the `ProducerController` and `ConsumerController`. Should rarely be used in
    * application code but is public because it's possible to wrap it or send it in other ways when

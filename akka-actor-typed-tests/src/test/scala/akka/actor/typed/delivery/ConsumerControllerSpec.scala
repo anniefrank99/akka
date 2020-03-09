@@ -6,6 +6,7 @@ package akka.actor.typed.delivery
 
 import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import akka.actor.typed.delivery.ConsumerController.DeliverThenStop
 import akka.actor.typed.delivery.internal.ConsumerControllerImpl
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -482,6 +483,51 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       testKit.stop(consumerController)
       producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(2L))
+    }
+
+    "support graceful stopping" in {
+      nextId()
+      val consumerController =
+        spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
+          .unsafeUpcast[ConsumerControllerImpl.InternalCommand]
+
+      val producerControllerProbe = createTestProbe[ProducerControllerImpl.InternalCommand]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
+
+      consumerController ! sequencedMessage(producerId, 1, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]]
+      producerControllerProbe.expectMessageType[ProducerControllerImpl.Request]
+      consumerController ! ConsumerController.Confirmed
+      producerControllerProbe.expectMessageType[ProducerControllerImpl.Request]
+
+      consumerController ! sequencedMessage(producerId, 2, producerControllerProbe.ref)
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].message should ===(
+        TestConsumer.Job("msg-2"))
+      consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
+
+      consumerController ! DeliverThenStop
+
+      consumerController ! ConsumerController.Confirmed // 2
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].message should ===(
+        TestConsumer.Job("msg-3"))
+      consumerController ! sequencedMessage(producerId, 5, producerControllerProbe.ref)
+      consumerController ! ConsumerController.Confirmed
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].message should ===(
+        TestConsumer.Job("msg-4"))
+      consumerController ! ConsumerController.Confirmed
+      consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].message should ===(
+        TestConsumer.Job("msg-5"))
+      consumerController ! ConsumerController.Confirmed
+
+      consumerProbe.expectTerminated(consumerController)
+
+      testKit.stop(consumerController)
+      // one Ack from postStop, and another from Behaviors.stopped callback after final Confirmed
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(4L))
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Ack(5L))
     }
   }
 
