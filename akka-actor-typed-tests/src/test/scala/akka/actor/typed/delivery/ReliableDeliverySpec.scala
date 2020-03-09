@@ -135,37 +135,47 @@ class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLik
 
     "allow replacement of producer" in {
       nextId()
-      val consumerEndProbe = createTestProbe[TestConsumer.CollectedProducerIds]()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
       val consumerController =
         spawn(ConsumerController[TestConsumer.Job](), s"consumerController-${idCount}")
-      spawn(
-        TestConsumer(defaultConsumerDelay, 42, consumerEndProbe.ref, consumerController),
-        name = s"destination-${idCount}")
+      consumerController ! ConsumerController.Start(consumerProbe.ref)
 
       val producerController1 =
         spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController1-${idCount}")
-      val producer1 = spawn(TestProducer(defaultProducerDelay, producerController1), name = s"producer1-${idCount}")
+      val producerProbe1 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController1 ! ProducerController.Start(producerProbe1.ref)
 
       producerController1 ! ProducerController.RegisterConsumer(consumerController)
 
-      // FIXME better way of testing this
-      Thread.sleep(300)
-      testKit.stop(producer1)
+      producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      val delivery1 = consumerProbe.receiveMessage()
+      delivery1.message should ===(TestConsumer.Job("msg-1"))
+      delivery1.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe1.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      val delivery2 = consumerProbe.receiveMessage()
+      delivery2.message should ===(TestConsumer.Job("msg-2"))
+      delivery2.confirmTo ! ConsumerController.Confirmed
+
+      // replace producer
       testKit.stop(producerController1)
-
       val producerController2 =
-        spawn(
-          ProducerController[TestConsumer.Job](
-            s"p-${idCount}", // must keep the same producerId
-            None),
-          s"producerController2-${idCount}")
-      val producer2 = spawn(TestProducer(defaultProducerDelay, producerController2), name = s"producer2-${idCount}")
-
+        spawn(ProducerController[TestConsumer.Job](s"p-${idCount}", None), s"producerController2-${idCount}")
+      val producerProbe2 = createTestProbe[ProducerController.RequestNext[TestConsumer.Job]]()
+      producerController2 ! ProducerController.Start(producerProbe2.ref)
       producerController2 ! ProducerController.RegisterConsumer(consumerController)
 
-      consumerEndProbe.receiveMessage(5.seconds)
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      val delivery3 = consumerProbe.receiveMessage()
+      delivery3.message should ===(TestConsumer.Job("msg-3"))
+      delivery3.confirmTo ! ConsumerController.Confirmed
 
-      testKit.stop(producer2)
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      val delivery4 = consumerProbe.receiveMessage()
+      delivery4.message should ===(TestConsumer.Job("msg-4"))
+      delivery4.confirmTo ! ConsumerController.Confirmed
+
       testKit.stop(producerController2)
       testKit.stop(consumerController)
     }
