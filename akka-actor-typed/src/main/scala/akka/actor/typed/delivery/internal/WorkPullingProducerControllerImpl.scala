@@ -79,10 +79,6 @@ import akka.util.Timeout
       msg: A,
       replyTo: Option[ActorRef[Done]])
 
-  private object State {
-    def empty[A]: State[A] = State(1, Set.empty, Map.empty, Map.empty, Map.empty, Map.empty, hasRequested = false)
-  }
-
   private final case class State[A](
       currentSeqNr: TotalSeqNr, // only updated when durableQueue is enabled
       workers: Set[ActorRef[ConsumerController.Command[A]]],
@@ -94,7 +90,8 @@ import akka.util.Timeout
       replyAfterStore: Map[TotalSeqNr, ActorRef[Done]],
       // when the worker is deregistered but there are still unconfirmed
       handOver: Map[TotalSeqNr, HandOver],
-      hasRequested: Boolean)
+      producer: ActorRef[WorkPullingProducerController.RequestNext[A]],
+      requested: Boolean)
 
   private case class PreselectedWorker(outKey: OutKey, confirmationQualifier: ConfirmationQualifier)
 
@@ -165,8 +162,8 @@ import akka.util.Timeout
       val msgAdapter: ActorRef[A] = context.messageAdapter(msg => Msg(msg, wasStashed = false, replyTo = None))
       val requestNext = RequestNext[A](msgAdapter, context.self)
       val b =
-        new WorkPullingProducerControllerImpl(context, stashBuffer, producerId, p, requestNext, durableQueue, settings)
-          .active(State.empty[A].copy(currentSeqNr = s.currentSeqNr))
+        new WorkPullingProducerControllerImpl(context, stashBuffer, producerId, requestNext, durableQueue, settings)
+          .active(createInitialState(s.currentSeqNr, p))
       stashBuffer.unstashAll(b)
     }
 
@@ -250,13 +247,17 @@ import akka.util.Timeout
     }
   }
 
+  private def createInitialState[A](
+      currentSeqNr: SeqNr,
+      producer: ActorRef[WorkPullingProducerController.RequestNext[A]]): State[A] =
+    State(currentSeqNr, Set.empty, Map.empty, Map.empty, Map.empty, Map.empty, producer, requested = false)
+
 }
 
 private class WorkPullingProducerControllerImpl[A: ClassTag](
     context: ActorContext[WorkPullingProducerControllerImpl.InternalCommand],
     stashBuffer: StashBuffer[WorkPullingProducerControllerImpl.InternalCommand],
     producerId: String,
-    producer: ActorRef[WorkPullingProducerController.RequestNext[A]],
     requestNext: WorkPullingProducerController.RequestNext[A],
     durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
     settings: WorkPullingProducerController.Settings) {
@@ -266,6 +267,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
   import DurableProducerQueue.StoreMessageSentAck
   import WorkPullingProducerController.GetWorkerStats
   import WorkPullingProducerController.MessageWithConfirmation
+  import WorkPullingProducerController.Start
   import WorkPullingProducerController.WorkerStats
   import WorkPullingProducerControllerImpl._
 
@@ -285,8 +287,8 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
           totalSeqNr,
           wasStashed,
           consumersWithDemand.map(_._1).mkString(", "),
-          s.hasRequested)
-      if (!s.hasRequested && !wasStashed && durableQueue.isEmpty)
+          s.requested)
+      if (!s.requested && !wasStashed && durableQueue.isEmpty)
         throw new IllegalStateException(s"Unexpected message [$msg], wasn't requested nor unstashed.")
 
       val selectedWorker =
@@ -309,8 +311,8 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
             case None =>
               context.log.debug("Stashing message, seqNr [{}]", totalSeqNr)
               stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
-              val newRequested = if (wasStashed) s.hasRequested else false
-              Left(s.copy(hasRequested = newRequested))
+              val newRequested = if (wasStashed) s.requested else false
+              Left(s.copy(requested = newRequested))
           }
         }
 
@@ -328,41 +330,41 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
           def tellRequestNext(): Unit = {
             context.log.trace("Sending RequestNext to producer, seqNr [{}].", totalSeqNr)
-            producer ! requestNext
+            s.producer ! requestNext
           }
 
           val hasMoreDemand = consumersWithDemand.size >= 2
           // decision table based on s.hasRequested, wasStashed, hasMoreDemand, stashBuffer.isEmpty
           val newRequested =
-            if (s.hasRequested && !wasStashed && hasMoreDemand) {
+            if (s.requested && !wasStashed && hasMoreDemand) {
               // request immediately since more demand
               tellRequestNext()
               true
-            } else if (s.hasRequested && !wasStashed && !hasMoreDemand) {
+            } else if (s.requested && !wasStashed && !hasMoreDemand) {
               // wait until more demand
               false
-            } else if (!s.hasRequested && wasStashed && hasMoreDemand && stashBuffer.isEmpty) {
+            } else if (!s.requested && wasStashed && hasMoreDemand && stashBuffer.isEmpty) {
               // msg was unstashed, the last from stash
               tellRequestNext()
               true
-            } else if (!s.hasRequested && wasStashed && hasMoreDemand && stashBuffer.nonEmpty) {
+            } else if (!s.requested && wasStashed && hasMoreDemand && stashBuffer.nonEmpty) {
               // more in stash
               false
-            } else if (!s.hasRequested && wasStashed && !hasMoreDemand) {
+            } else if (!s.requested && wasStashed && !hasMoreDemand) {
               // wait until more demand
               false
-            } else if (s.hasRequested && wasStashed) {
+            } else if (s.requested && wasStashed) {
               // msg was unstashed, but pending request alread in progress
               true
-            } else if (durableQueue.isDefined && !s.hasRequested && !wasStashed) {
+            } else if (durableQueue.isDefined && !s.requested && !wasStashed) {
               // msg ResendDurableMsg, and stashed before storage
               false
             } else {
-              throw new IllegalStateException(s"Invalid combination of hasRequested [${s.hasRequested}], " +
+              throw new IllegalStateException(s"Invalid combination of hasRequested [${s.requested}], " +
               s"wasStashed [$wasStashed], hasMoreDemand [$hasMoreDemand], stashBuffer.isEmpty [${stashBuffer.isEmpty}]")
             }
 
-          s.copy(out = newOut, hasRequested = newRequested, preselectedWorkers = s.preselectedWorkers - totalSeqNr)
+          s.copy(out = newOut, requested = newRequested, preselectedWorkers = s.preselectedWorkers - totalSeqNr)
 
         case Left(newState) =>
           newState
@@ -503,12 +505,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
           if (stashBuffer.nonEmpty) {
             context.log.debug2("Unstash [{}] after RequestNext from worker [{}]", stashBuffer.size, w.next.producerId)
             stashBuffer.unstashAll(active(s.copy(out = newOut)))
-          } else if (s.hasRequested) {
+          } else if (s.requested) {
             active(s.copy(out = newOut))
           } else {
             context.log.trace("Sending RequestNext to producer after RequestNext from worker [{}].", w.next.producerId)
-            producer ! requestNext
-            active(s.copy(out = newOut, hasRequested = true))
+            s.producer ! requestNext
+            active(s.copy(out = newOut, requested = true))
           }
 
         case None =>
@@ -564,6 +566,14 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       active(newState2.copy(workers = curr.workers))
     }
 
+    def receiveStart(start: Start[A]): Behavior[InternalCommand] = {
+      ProducerControllerImpl.enforceLocalProducer(start.producer)
+      context.log.debug("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
+      if (s.requested)
+        start.producer ! requestNext
+      active(s.copy(producer = start.producer))
+    }
+
     Behaviors.receiveMessage {
       case Msg(msg: A, wasStashed, replyTo) =>
         if (durableQueue.isEmpty || wasStashed)
@@ -602,6 +612,9 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       case RegisterConsumerDone =>
         Behaviors.same
 
+      case start: Start[A] =>
+        receiveStart(start)
+
       case AskTimeout(outKey, outSeqNr) =>
         context.log.debug(
           "Message seqNr [{}] sent to worker [{}] timed out. It will be be redelivered.",
@@ -611,8 +624,6 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
       case DurableQueueTerminated =>
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
-
-      // FIXME case Start register of new producer, e.g. restart
 
     }
   }
@@ -640,6 +651,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       case Failure(_) => StoreMessageSentFailed(messageSent, attempt) // timeout
     }
   }
+
 }
 
 // FIXME Maybe there is a case where this producer has to notice that the ShardingConsumerController terminated

@@ -82,6 +82,7 @@ import akka.util.Timeout
 
   private final case class State[A](
       currentSeqNr: TotalSeqNr,
+      producer: ActorRef[ShardingProducerController.RequestNext[A]],
       // FIXME some cleanup mechanism of entities that haven't been used for a while.
       //       Maybe we can watch the corresponding ConsumerController, to be notified of entity passivation.
       //       It should still survive a rebalance, so some idle time aspect is still needed.
@@ -144,8 +145,8 @@ import akka.util.Timeout
           val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, alreadyStored = 0))
           if (s.unconfirmed.isEmpty)
             p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
-          val b = new ShardingProducerControllerImpl(context, producerId, p, msgAdapter, region, durableQueue, settings)
-            .active(State(s.currentSeqNr, Map.empty, Map.empty))
+          val b = new ShardingProducerControllerImpl(context, producerId, msgAdapter, region, durableQueue, settings)
+            .active(State(s.currentSeqNr, p, Map.empty, Map.empty))
 
           newStashBuffer.unstashAll(b)
         }
@@ -246,7 +247,6 @@ import akka.util.Timeout
 private class ShardingProducerControllerImpl[A: ClassTag](
     context: ActorContext[ShardingProducerControllerImpl.InternalCommand],
     producerId: String,
-    producer: ActorRef[ShardingProducerController.RequestNext[A]],
     msgAdapter: ActorRef[ShardingEnvelope[A]],
     region: ActorRef[ShardingEnvelope[ConsumerController.SequencedMessage[A]]],
     durableQueue: Option[ActorRef[DurableProducerQueue.Command[A]]],
@@ -258,6 +258,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
   import ShardingProducerController.EntityId
   import ShardingProducerController.MessageWithConfirmation
   import ShardingProducerController.RequestNext
+  import ShardingProducerController.Start
   import ShardingProducerControllerImpl._
 
   private val durableQueueAskTimeout: Timeout = settings.producerControllerSettings.durableQueueRequestTimeout
@@ -295,7 +296,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
                 out = s.out.updated(outKey, out.copy(buffered = newBuffered)),
                 replyAfterStore = newReplyAfterStore)
             // send an updated RequestNext to indicate buffer usage
-            producer ! createRequestNext(newS)
+            s.producer ! createRequestNext(newS)
             newS
           case None =>
             context.log.debug("Creating ProducerController for entity [{}]", entityId)
@@ -405,7 +406,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
               s.out.updated(outKey, out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed))
             val newState = s.copy(out = newProducers)
             // send an updated RequestNext
-            producer ! createRequestNext(newState)
+            s.producer ! createRequestNext(newState)
             active(newState)
           }
 
@@ -413,6 +414,13 @@ private class ShardingProducerControllerImpl[A: ClassTag](
           // FIXME support termination and removal of ProducerController
           throw new IllegalStateException(s"Unexpected RequestNext for unknown [$outKey]")
       }
+    }
+
+    def receiveStart(start: Start[A]): Behavior[InternalCommand] = {
+      ProducerControllerImpl.enforceLocalProducer(start.producer)
+      context.log.debug("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
+      start.producer ! createRequestNext(s)
+      active(s.copy(producer = start.producer))
     }
 
     Behaviors.receiveMessage {
@@ -450,6 +458,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       case w: WrappedRequestNext[A] =>
         receiveWrappedRequestNext(w)
 
+      case start: Start[A] =>
+        receiveStart(start)
+
       case AskTimeout(outKey, outSeqNr) =>
         context.log.debug(
           "Message seqNr [{}] sent to entity [{}] timed out. It will be be redelivered.",
@@ -460,7 +471,6 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       case DurableQueueTerminated =>
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
-      // FIXME case Start register of new produce, e.g. restart
     }
   }
 

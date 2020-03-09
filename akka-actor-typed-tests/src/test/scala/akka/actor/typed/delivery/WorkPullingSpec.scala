@@ -225,6 +225,47 @@ class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike wit
       testKit.stop(workPullingController)
     }
 
+    "allow restart of producer" in {
+      nextId()
+
+      val workPullingController =
+        spawn(
+          WorkPullingProducerController[TestConsumer.Job](producerId, workerServiceKey, None),
+          s"workPullingController-${idCount}")
+      val producerProbe = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
+      workPullingController ! WorkPullingProducerController.Start(producerProbe.ref)
+
+      val workerController1Probe = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
+      system.receptionist ! Receptionist.Register(workerServiceKey, workerController1Probe.ref)
+      awaitWorkersRegistered(workPullingController, 1)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-1")
+      val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+      seqMsg1.message should ===(TestConsumer.Job("msg-1"))
+      seqMsg1.producer ! ProducerControllerImpl.Request(1L, 10L, true, false)
+
+      producerProbe.receiveMessage().sendNextTo ! TestConsumer.Job("msg-2")
+      workerController1Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-2"))
+      producerProbe.receiveMessage()
+
+      // restart producer, new Start
+      val producerProbe2 = createTestProbe[WorkPullingProducerController.RequestNext[TestConsumer.Job]]()
+      workPullingController ! WorkPullingProducerController.Start(producerProbe2.ref)
+
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-3")
+      workerController1Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-3"))
+      producerProbe2.receiveMessage().sendNextTo ! TestConsumer.Job("msg-4")
+      workerController1Probe
+        .expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
+        .message should ===(TestConsumer.Job("msg-4"))
+
+      testKit.stop(workPullingController)
+    }
+
   }
 
 }

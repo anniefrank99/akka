@@ -299,6 +299,36 @@ class ReliableDeliveryShardingSpec
       testKit.stop(shardingProducerController)
     }
 
+    "allow restart of producer" in {
+      nextId()
+
+      val shardingProbe =
+        createTestProbe[ShardingEnvelope[SequencedMessage[TestConsumer.Job]]]()
+      val shardingProducerController =
+        spawn(
+          ShardingProducerController[TestConsumer.Job](producerId, shardingProbe.ref, None),
+          s"shardingController-$idCount")
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
+      val seq1 = shardingProbe.receiveMessage().message
+      seq1.message should ===(TestConsumer.Job("msg-1"))
+      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
+      shardingProbe.receiveMessage().message.message should ===(TestConsumer.Job("msg-2"))
+
+      // restart producer, new Start
+      val producerProbe2 = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController ! ShardingProducerController.Start(producerProbe2.ref)
+
+      producerProbe2.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
+      shardingProbe.receiveMessage().message.message should ===(TestConsumer.Job("msg-3"))
+
+      testKit.stop(shardingProducerController)
+    }
+
   }
 
 }
