@@ -161,6 +161,7 @@ object ShardingProducerController {
       new Settings(
         bufferSize = config.getInt("buffer-size"),
         config.getDuration("internal-ask-timeout").asScala,
+        config.getDuration("cleanup-unused-after").asScala,
         config.getDuration("resend-first-unconfirmed-idle-timeout").asScala,
         ProducerController.Settings(config))
     }
@@ -183,6 +184,7 @@ object ShardingProducerController {
   final class Settings private (
       val bufferSize: Int,
       val internalAskTimeout: FiniteDuration,
+      val cleanupUnusedAfter: FiniteDuration,
       val resendFirsUnconfirmedIdleTimeout: FiniteDuration,
       val producerControllerSettings: ProducerController.Settings) {
 
@@ -194,6 +196,12 @@ object ShardingProducerController {
 
     def withInternalAskTimeout(newInternalAskTimeout: java.time.Duration): Settings =
       copy(internalAskTimeout = newInternalAskTimeout.asScala)
+
+    def withCleanupUnusedAfter(newCleanupUnusedAfter: FiniteDuration): Settings =
+      copy(cleanupUnusedAfter = newCleanupUnusedAfter)
+
+    def withCleanupUnusedAfter(newCleanupUnusedAfter: java.time.Duration): Settings =
+      copy(cleanupUnusedAfter = newCleanupUnusedAfter.asScala)
 
     def withResendFirsUnconfirmedIdleTimeout(newResendFirsUnconfirmedIdleTimeout: FiniteDuration): Settings =
       copy(resendFirsUnconfirmedIdleTimeout = newResendFirsUnconfirmedIdleTimeout)
@@ -210,9 +218,15 @@ object ShardingProducerController {
     private def copy(
         bufferSize: Int = bufferSize,
         internalAskTimeout: FiniteDuration = internalAskTimeout,
+        cleanupUnusedAfter: FiniteDuration = cleanupUnusedAfter,
         resendFirsUnconfirmedIdleTimeout: FiniteDuration = resendFirsUnconfirmedIdleTimeout,
         producerControllerSettings: ProducerController.Settings = producerControllerSettings) =
-      new Settings(bufferSize, internalAskTimeout, resendFirsUnconfirmedIdleTimeout, producerControllerSettings)
+      new Settings(
+        bufferSize,
+        internalAskTimeout,
+        cleanupUnusedAfter,
+        resendFirsUnconfirmedIdleTimeout,
+        producerControllerSettings)
 
     override def toString: String =
       s"Settings($bufferSize,$internalAskTimeout,$resendFirsUnconfirmedIdleTimeout,$producerControllerSettings)"

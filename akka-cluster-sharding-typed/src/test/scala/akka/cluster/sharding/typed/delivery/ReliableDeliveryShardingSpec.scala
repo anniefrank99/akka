@@ -387,6 +387,67 @@ class ReliableDeliveryShardingSpec
       val delivery4b = consumerProbes(2).receiveMessage()
       delivery4b.message should ===(TestConsumer.Job("msg-4"))
 
+      consumerProbes(2).stop()
+      testKit.stop(shardingProducerController)
+    }
+
+    "cleanup unused ProducerController" in {
+      nextId()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
+      val region = ClusterSharding(system).init(Entity(typeKey)(_ =>
+        ShardingConsumerController[TestConsumer.Job, TestConsumer.Command] { cc =>
+          cc ! ConsumerController.Start(consumerProbe.ref)
+          Behaviors.empty
+        }))
+
+      val shardingProducerSettings =
+        ShardingProducerController.Settings(system).withCleanupUnusedAfter(1.second)
+      val shardingProducerController =
+        spawn(
+          ShardingProducerController[TestConsumer.Job](producerId, region, None, shardingProducerSettings),
+          s"shardingController-$idCount")
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
+      val delivery1 = consumerProbe.receiveMessage()
+      delivery1.message should ===(TestConsumer.Job("msg-1"))
+      delivery1.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
+      val delivery2 = consumerProbe.receiveMessage()
+      delivery2.message should ===(TestConsumer.Job("msg-2"))
+      delivery2.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-3"))
+      val delivery3 = consumerProbe.receiveMessage()
+      delivery3.message should ===(TestConsumer.Job("msg-3"))
+      // msg-3 not Confirmed
+
+      val next4 = producerProbe.receiveMessage()
+      next4.entitiesWithDemand should ===(Set("entity-1", "entity-2"))
+
+      Thread.sleep(2000)
+
+      next4.sendNextTo ! ShardingEnvelope("entity-2", TestConsumer.Job("msg-4"))
+      val next5 = producerProbe.receiveMessage()
+      next5.entitiesWithDemand should ===(Set("entity-2")) // entity-1 removed
+
+      delivery3.confirmTo ! ConsumerController.Confirmed
+      val delivery4 = consumerProbe.receiveMessage()
+      delivery4.message should ===(TestConsumer.Job("msg-4"))
+      delivery4.confirmTo ! ConsumerController.Confirmed
+
+      // send to entity-1 again
+      next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-5"))
+      val delivery5 = consumerProbe.receiveMessage()
+      delivery5.message should ===(TestConsumer.Job("msg-5"))
+      delivery5.confirmTo ! ConsumerController.Confirmed
+
+      consumerProbe.stop()
       testKit.stop(shardingProducerController)
     }
 

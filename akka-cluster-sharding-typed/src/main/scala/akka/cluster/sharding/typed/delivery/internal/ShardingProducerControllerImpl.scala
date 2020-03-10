@@ -66,6 +66,7 @@ import akka.util.Timeout
   private case object DurableQueueTerminated extends InternalCommand
 
   private case object ResendFirstUnconfirmed extends InternalCommand
+  private case object CleanupUnused extends InternalCommand
 
   private final case class OutState[A](
       entityId: EntityId,
@@ -86,9 +87,6 @@ import akka.util.Timeout
   private final case class State[A](
       currentSeqNr: TotalSeqNr,
       producer: ActorRef[ShardingProducerController.RequestNext[A]],
-      // FIXME some cleanup mechanism of entities that haven't been used for a while.
-      //       Maybe we can watch the corresponding ConsumerController, to be notified of entity passivation.
-      //       It should still survive a rebalance, so some idle time aspect is still needed.
       out: Map[OutKey, OutState[A]],
       // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
       replyAfterStore: Map[TotalSeqNr, ActorRef[Done]])
@@ -137,6 +135,7 @@ import akka.util.Timeout
 
     def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
       Behaviors.withTimers { timers =>
+        timers.startTimerWithFixedDelay(CleanupUnused, settings.cleanupUnusedAfter / 2)
         timers.startTimerWithFixedDelay(ResendFirstUnconfirmed, settings.resendFirsUnconfirmedIdleTimeout / 2)
 
         // resend unconfirmed before other stashed messages
@@ -399,7 +398,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       }
     }
 
-    def receiveWrappedRequestNext(w: WrappedRequestNext[A]) = {
+    def receiveWrappedRequestNext(w: WrappedRequestNext[A]): Behavior[InternalCommand] = {
       val next = w.next
       val outKey = next.producerId
       s.out.get(outKey) match {
@@ -436,8 +435,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
           }
 
         case None =>
-          // FIXME support termination and removal of ProducerController
-          throw new IllegalStateException(s"Unexpected RequestNext for unknown [$outKey]")
+          // if ProducerController was stopped and there was a RequestNext in flight, but will not happen in practise
+          context.log.warn("Received RequestNext for unknown [{}]", outKey)
+          Behaviors.same
       }
     }
 
@@ -463,6 +463,25 @@ private class ShardingProducerControllerImpl[A: ClassTag](
           }
       }
       Behaviors.same
+    }
+
+    def receiveCleanupUnused(): Behavior[InternalCommand] = {
+      val now = System.nanoTime()
+      val removeOutKeys =
+        s.out.flatMap {
+          case (outKey: OutKey, outState) =>
+            val idleDurationMillis = (now - outState.usedNanoTime) / 1000 / 1000
+            if (outState.unconfirmed.isEmpty && outState.buffered.isEmpty && idleDurationMillis >= settings.cleanupUnusedAfter.toMillis) {
+              context.log.debug("Cleanup unused [{}], because it was idle for [{} ms]", outKey, idleDurationMillis)
+              context.stop(outState.producerController)
+              Some(outKey)
+            } else
+              None
+        }
+      if (removeOutKeys.isEmpty)
+        Behaviors.same
+      else
+        active(s.copy(out = s.out -- removeOutKeys))
     }
 
     Behaviors.receiveMessage {
@@ -502,6 +521,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
       case ResendFirstUnconfirmed =>
         receiveResendFirstUnconfirmed()
+
+      case CleanupUnused =>
+        receiveCleanupUnused()
 
       case start: Start[A] =>
         receiveStart(start)
