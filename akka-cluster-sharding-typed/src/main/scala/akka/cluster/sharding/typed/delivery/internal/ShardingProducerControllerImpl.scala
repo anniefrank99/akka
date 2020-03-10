@@ -65,13 +65,16 @@ import akka.util.Timeout
       extends InternalCommand
   private case object DurableQueueTerminated extends InternalCommand
 
+  private case object ResendFirstUnconfirmed extends InternalCommand
+
   private final case class OutState[A](
       entityId: EntityId,
       producerController: ActorRef[ProducerController.Command[A]],
       nextTo: Option[ProducerController.RequestNext[A]],
       buffered: Vector[Buffered[A]],
       seqNr: OutSeqNr,
-      unconfirmed: Vector[Unconfirmed[A]]) {
+      unconfirmed: Vector[Unconfirmed[A]],
+      usedNanoTime: Long) {
     if (nextTo.nonEmpty && buffered.nonEmpty)
       throw new IllegalStateException("nextTo and buffered shouldn't both be nonEmpty.")
   }
@@ -133,22 +136,26 @@ import akka.util.Timeout
       settings: ShardingProducerController.Settings): Behavior[InternalCommand] = {
 
     def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
-      // resend unconfirmed before other stashed messages
-      Behaviors.withStash[InternalCommand](settings.bufferSize) { newStashBuffer =>
-        Behaviors.setup { _ =>
-          s.unconfirmed.foreach { m =>
-            newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.message), alreadyStored = m.seqNr))
+      Behaviors.withTimers { timers =>
+        timers.startTimerWithFixedDelay(ResendFirstUnconfirmed, settings.resendFirsUnconfirmedIdleTimeout / 2)
+
+        // resend unconfirmed before other stashed messages
+        Behaviors.withStash[InternalCommand](settings.bufferSize) { newStashBuffer =>
+          Behaviors.setup { _ =>
+            s.unconfirmed.foreach { m =>
+              newStashBuffer.stash(Msg(ShardingEnvelope(m.confirmationQualifier, m.message), alreadyStored = m.seqNr))
+            }
+            // append other stashed messages after the unconfirmed
+            stashBuffer.foreach(newStashBuffer.stash)
+
+            val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, alreadyStored = 0))
+            if (s.unconfirmed.isEmpty)
+              p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
+            val b = new ShardingProducerControllerImpl(context, producerId, msgAdapter, region, durableQueue, settings)
+              .active(State(s.currentSeqNr, p, Map.empty, Map.empty))
+
+            newStashBuffer.unstashAll(b)
           }
-          // append other stashed messages after the unconfirmed
-          stashBuffer.foreach(newStashBuffer.stash)
-
-          val msgAdapter: ActorRef[ShardingEnvelope[A]] = context.messageAdapter(msg => Msg(msg, alreadyStored = 0))
-          if (s.unconfirmed.isEmpty)
-            p ! RequestNext(msgAdapter, context.self, Set.empty, Map.empty)
-          val b = new ShardingProducerControllerImpl(context, producerId, msgAdapter, region, durableQueue, settings)
-            .active(State(s.currentSeqNr, p, Map.empty, Map.empty))
-
-          newStashBuffer.unstashAll(b)
         }
       }
     }
@@ -279,14 +286,20 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       val outKey = s"$producerId-$entityId"
       val newState =
         s.out.get(outKey) match {
-          case Some(out @ OutState(_, _, Some(nextTo), _, _, _)) =>
+          case Some(out @ OutState(_, _, Some(nextTo), _, _, _, _)) =>
             // there is demand, send immediately
             send(msg, outKey, out.seqNr, nextTo)
             val newUnconfirmed = out.unconfirmed :+ Unconfirmed(totalSeqNr, out.seqNr, replyTo)
             s.copy(
-              out = s.out.updated(outKey, out.copy(seqNr = out.seqNr + 1, nextTo = None, unconfirmed = newUnconfirmed)),
+              out = s.out.updated(
+                outKey,
+                out.copy(
+                  seqNr = out.seqNr + 1,
+                  nextTo = None,
+                  unconfirmed = newUnconfirmed,
+                  usedNanoTime = System.nanoTime())),
               replyAfterStore = newReplyAfterStore)
-          case Some(out @ OutState(_, _, None, buffered, _, _)) =>
+          case Some(out @ OutState(_, _, None, buffered, _, _, _)) =>
             // no demand, buffer
             // FIXME limit the buffers.
             context.log.debug("Buffering message to entityId [{}], buffer size [{}]", entityId, buffered.size + 1)
@@ -310,7 +323,14 @@ private class ShardingProducerControllerImpl[A: ClassTag](
             s.copy(
               out = s.out.updated(
                 outKey,
-                OutState(entityId, p, None, Vector(Buffered(totalSeqNr, msg, replyTo)), 1L, Vector.empty)),
+                OutState(
+                  entityId,
+                  p,
+                  None,
+                  Vector(Buffered(totalSeqNr, msg, replyTo)),
+                  1L,
+                  Vector.empty,
+                  System.nanoTime())),
               replyAfterStore = newReplyAfterStore)
         }
 
@@ -370,7 +390,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
         case Some(outState) =>
           context.log.trace2("Received Ack, confirmed [{}], current [{}].", ack.confirmedSeqNr, s.currentSeqNr)
           val newUnconfirmed = onAck(outState, ack.confirmedSeqNr)
-          active(s.copy(out = s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed))))
+          active(
+            s.copy(out =
+              s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed, usedNanoTime = System.nanoTime()))))
         case None =>
           // obsolete Ack, ConsumerController already deregistered
           Behaviors.unhandled
@@ -399,11 +421,14 @@ private class ShardingProducerControllerImpl[A: ClassTag](
                 seqNr = out.seqNr + 1,
                 nextTo = None,
                 unconfirmed = newUnconfirmed2,
-                buffered = out.buffered.tail))
+                buffered = out.buffered.tail,
+                usedNanoTime = System.nanoTime()))
             active(s.copy(out = newProducers))
           } else {
             val newProducers =
-              s.out.updated(outKey, out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed))
+              s.out.updated(
+                outKey,
+                out.copy(nextTo = Some(next), unconfirmed = newUnconfirmed, usedNanoTime = System.nanoTime()))
             val newState = s.copy(out = newProducers)
             // send an updated RequestNext
             s.producer ! createRequestNext(newState)
@@ -421,6 +446,23 @@ private class ShardingProducerControllerImpl[A: ClassTag](
       context.log.debug("Register new Producer [{}], currentSeqNr [{}].", start.producer, s.currentSeqNr)
       start.producer ! createRequestNext(s)
       active(s.copy(producer = start.producer))
+    }
+
+    def receiveResendFirstUnconfirmed(): Behavior[InternalCommand] = {
+      val now = System.nanoTime()
+      s.out.foreach {
+        case (outKey: OutKey, outState) =>
+          val idleDurationMillis = (now - outState.usedNanoTime) / 1000 / 1000
+          if (outState.unconfirmed.nonEmpty && idleDurationMillis >= settings.resendFirsUnconfirmedIdleTimeout.toMillis) {
+            context.log.debug(
+              "Resend first unconfirmed for [{}], because it was idle for [{} ms]",
+              outKey,
+              idleDurationMillis)
+            outState.producerController
+              .unsafeUpcast[ProducerControllerImpl.InternalCommand] ! ProducerControllerImpl.ResendFirstUnconfirmed
+          }
+      }
+      Behaviors.same
     }
 
     Behaviors.receiveMessage {
@@ -457,6 +499,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
       case w: WrappedRequestNext[A] =>
         receiveWrappedRequestNext(w)
+
+      case ResendFirstUnconfirmed =>
+        receiveResendFirstUnconfirmed()
 
       case start: Start[A] =>
         receiveStart(start)

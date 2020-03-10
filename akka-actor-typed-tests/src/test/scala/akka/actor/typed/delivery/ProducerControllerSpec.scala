@@ -150,12 +150,10 @@ class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       val consumerControllerProbe2 = createTestProbe[ConsumerController.Command[TestConsumer.Job]]()
       producerController ! ProducerController.RegisterConsumer(consumerControllerProbe2.ref)
 
-      consumerControllerProbe2.expectMessage(
-        sequencedMessage(producerId, 2, producerController).copy(first = true)(producerController))
+      consumerControllerProbe2.expectMessage(sequencedMessage(producerId, 2, producerController).asFirst)
       consumerControllerProbe2.expectNoMessage(100.millis)
       // if no Request confirming the first (seqNr=2) it will resend it
-      consumerControllerProbe2.expectMessage(
-        sequencedMessage(producerId, 2, producerController).copy(first = true)(producerController))
+      consumerControllerProbe2.expectMessage(sequencedMessage(producerId, 2, producerController).asFirst)
 
       producerController ! ProducerControllerImpl.Request(2L, 10L, true, false)
       // then the other unconfirmed should be resent

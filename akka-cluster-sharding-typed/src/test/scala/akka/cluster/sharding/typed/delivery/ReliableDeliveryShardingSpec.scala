@@ -4,6 +4,8 @@
 
 package akka.cluster.sharding.typed.delivery
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import scala.concurrent.duration._
 
 import akka.Done
@@ -11,6 +13,7 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
+import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.ConsumerController.SequencedMessage
 import akka.actor.typed.delivery.TestConsumer
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
@@ -329,6 +332,66 @@ class ReliableDeliveryShardingSpec
       testKit.stop(shardingProducerController)
     }
 
+    "deliver unconfirmed if ShardingConsumerController is terminated" in {
+      // for example if ShardingConsumerController is rebalanced, but no more messages are sent to the entity
+      nextId()
+
+      val consumerIncarnation = new AtomicInteger(0)
+      val consumerProbes = Vector.fill(3)(createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]())
+
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
+      val region = ClusterSharding(system).init(Entity(typeKey)(_ =>
+        ShardingConsumerController[TestConsumer.Job, TestConsumer.Command] { cc =>
+          cc ! ConsumerController.Start(consumerProbes(consumerIncarnation.getAndIncrement()).ref)
+          Behaviors.empty
+        }))
+
+      val shardingProducerSettings =
+        ShardingProducerController.Settings(system).withResendFirsUnconfirmedIdleTimeout(1500.millis)
+      val shardingProducerController =
+        spawn(
+          ShardingProducerController[TestConsumer.Job](producerId, region, None, shardingProducerSettings),
+          s"shardingController-$idCount")
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController ! ShardingProducerController.Start(producerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
+      val delivery1 = consumerProbes(0).receiveMessage()
+      delivery1.message should ===(TestConsumer.Job("msg-1"))
+      delivery1.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
+      val delivery2 = consumerProbes(0).receiveMessage()
+      delivery2.message should ===(TestConsumer.Job("msg-2"))
+      delivery2.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
+      val delivery3 = consumerProbes(0).receiveMessage()
+      delivery3.message should ===(TestConsumer.Job("msg-3"))
+      // msg-3 not Confirmed
+
+      consumerProbes(0).stop()
+      Thread.sleep(1000) // let it terminate
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-4"))
+      val delivery3b = consumerProbes(1).receiveMessage()
+      // msg-3 is redelivered
+      delivery3b.message should ===(TestConsumer.Job("msg-3"))
+      delivery3b.confirmTo ! ConsumerController.Confirmed
+      val delivery4 = consumerProbes(1).receiveMessage()
+      delivery4.message should ===(TestConsumer.Job("msg-4"))
+
+      // redeliver also when no more messages are sent
+      consumerProbes(1).stop()
+
+      val delivery4b = consumerProbes(2).receiveMessage()
+      delivery4b.message should ===(TestConsumer.Job("msg-4"))
+
+      testKit.stop(shardingProducerController)
+    }
+
   }
 
 }
+
+// TODO add a random test for sharding

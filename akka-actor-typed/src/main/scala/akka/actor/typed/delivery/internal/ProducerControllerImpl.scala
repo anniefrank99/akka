@@ -93,6 +93,7 @@ object ProducerControllerImpl {
 
   private case class Msg[A](msg: A) extends InternalCommand
   private case object ResendFirst extends InternalCommand
+  case object ResendFirstUnconfirmed extends InternalCommand
 
   private case class LoadStateReply[A](state: DurableProducerQueue.State[A]) extends InternalCommand
   private case class LoadStateFailed(attempt: Int) extends InternalCommand
@@ -479,7 +480,11 @@ private class ProducerControllerImpl[A: ClassTag](
     }
 
     def receiveResend(fromSeqNr: SeqNr): Behavior[InternalCommand] = {
-      val newUnconfirmed = s.unconfirmed.dropWhile(_.seqNr < fromSeqNr)
+      val newUnconfirmed =
+        if (fromSeqNr == 0 && s.unconfirmed.nonEmpty)
+          s.unconfirmed.head.asFirst +: s.unconfirmed.tail
+        else
+          s.unconfirmed.dropWhile(_.seqNr < fromSeqNr)
       resendUnconfirmed(newUnconfirmed)
       active(s.copy(unconfirmed = newUnconfirmed))
     }
@@ -490,10 +495,18 @@ private class ProducerControllerImpl[A: ClassTag](
       newUnconfirmed.foreach(s.send)
     }
 
+    def receiveResendFirstUnconfirmed(): Behavior[InternalCommand] = {
+      if (s.unconfirmed.nonEmpty) {
+        context.log.debug("Resending first unconfirmed [{}].", s.unconfirmed.head.seqNr)
+        s.send(s.unconfirmed.head)
+      }
+      Behaviors.same
+    }
+
     def receiveResendFirst(): Behavior[InternalCommand] = {
       if (s.unconfirmed.nonEmpty && s.unconfirmed.head.seqNr == s.firstSeqNr) {
         context.log.debug("Resending first, [{}].", s.firstSeqNr)
-        s.send(s.unconfirmed.head.copy(first = true)(context.self))
+        s.send(s.unconfirmed.head.asFirst)
       } else {
         if (s.currentSeqNr > s.firstSeqNr)
           timers.cancel(ResendFirst)
@@ -562,6 +575,9 @@ private class ProducerControllerImpl[A: ClassTag](
 
       case ResendFirst =>
         receiveResendFirst()
+
+      case ResendFirstUnconfirmed =>
+        receiveResendFirstUnconfirmed()
 
       case start: Start[A] =>
         receiveStart(start)

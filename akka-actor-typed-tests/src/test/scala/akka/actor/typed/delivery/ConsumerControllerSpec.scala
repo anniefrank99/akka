@@ -398,14 +398,12 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       // and if the ProducerController is changed
       val producerControllerProbe2 = createTestProbe[ProducerControllerImpl.InternalCommand]()
-      consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref)
-        .copy(first = true)(producerControllerProbe2.ref)
+      consumerController ! sequencedMessage(producerId, 23, producerControllerProbe2.ref).asFirst
       producerControllerProbe2.expectMessage(ProducerControllerImpl.Request(0, 23 + flowControlWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
 
       val producerControllerProbe3 = createTestProbe[ProducerControllerImpl.InternalCommand]()
-      consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref)
-        .copy(first = true)(producerControllerProbe3.ref)
+      consumerController ! sequencedMessage(producerId, 7, producerControllerProbe3.ref).asFirst
       producerControllerProbe3.expectMessage(ProducerControllerImpl.Request(0, 7 + flowControlWindow - 1, true, false))
       consumerProbe.receiveMessage().confirmTo ! ConsumerController.Confirmed
 
@@ -423,8 +421,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       // not first, will be ignored
       consumerController ! sequencedMessage(producerId, 44, producerControllerProbe.ref)
-      consumerController ! sequencedMessage(producerId, 41, producerControllerProbe.ref)
-        .copy(first = true)(producerControllerProbe.ref)
+      consumerController ! sequencedMessage(producerId, 41, producerControllerProbe.ref).asFirst
       // still waiting for Start, so 45 is stashed
       consumerController ! sequencedMessage(producerId, 45, producerControllerProbe.ref)
 

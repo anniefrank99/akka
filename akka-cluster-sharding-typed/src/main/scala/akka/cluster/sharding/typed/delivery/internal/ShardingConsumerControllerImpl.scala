@@ -26,19 +26,22 @@ import akka.cluster.sharding.typed.delivery.ShardingConsumerController
         context.setLoggerName("akka.cluster.sharding.typed.delivery.ShardingConsumerController")
         val consumer = context.spawn(consumerBehavior(context.self), name = "consumer")
         context.watch(consumer)
-        waitForStart(context, settings)
+        waitForStart(context, settings, consumer)
       }
       .narrow
   }
 
   private def waitForStart[A](
       context: ActorContext[ConsumerController.Command[A]],
-      settings: ShardingConsumerController.Settings): Behavior[ConsumerController.Command[A]] = {
+      settings: ShardingConsumerController.Settings,
+      consumer: ActorRef[_]): Behavior[ConsumerController.Command[A]] = {
     Behaviors.withStash(settings.bufferSize) { stashBuffer =>
       Behaviors
         .receiveMessage[ConsumerController.Command[A]] {
           case start: ConsumerController.Start[A] =>
             ConsumerControllerImpl.enforceLocalConsumer(start.deliverTo)
+            context.unwatch(consumer)
+            context.watch(start.deliverTo)
             stashBuffer.unstashAll(
               new ShardingConsumerControllerImpl[A](context, start.deliverTo, settings).active(Map.empty))
           case other =>
@@ -46,7 +49,8 @@ import akka.cluster.sharding.typed.delivery.ShardingConsumerController
             Behaviors.same
         }
         .receiveSignal {
-          case (_, Terminated(_)) =>
+          case (_, Terminated(`consumer`)) =>
+            context.log.debug("Consumer terminated before initialized.")
             Behaviors.stopped
         }
     }
@@ -64,24 +68,37 @@ private class ShardingConsumerControllerImpl[A](
 
     Behaviors
       .receiveMessagePartial[ConsumerController.Command[A]] {
-        case msg: ConsumerController.SequencedMessage[A] =>
-          controllers.get(msg.producerId) match {
+        case seqMsg: ConsumerController.SequencedMessage[A] =>
+          controllers.get(seqMsg.producerId) match {
             case Some(c) =>
-              c ! msg
+              c ! seqMsg
               Behaviors.same
             case None =>
-              val c = context.spawn(
+              context.log.debug("Starting ConsumerController for producerId [{}].", seqMsg.producerId)
+              val cc = context.spawn(
                 ConsumerController[A](settings.consumerControllerSettings),
-                s"consumerController-${msg.producerId}")
+                s"consumerController-${seqMsg.producerId}")
               // FIXME watch msg.producerController to cleanup terminated producers
-              c ! ConsumerController.Start(deliverTo)
-              c ! msg
-              active(controllers.updated(msg.producerId, c))
+              context.watch(cc)
+              cc ! ConsumerController.Start(deliverTo)
+              cc ! seqMsg
+              active(controllers.updated(seqMsg.producerId, cc))
           }
       }
       .receiveSignal {
-        case (_, Terminated(_)) =>
+        case (_, Terminated(`deliverTo`)) =>
+          context.log.debug("Consumer terminated.")
           Behaviors.stopped
+        case (_, Terminated(ref)) =>
+          controllers.find { case (_, cc) => ref == cc } match {
+            case Some((producerId, _)) =>
+              context.log.debug("ConsumerController for producerId [{}] terminated.", producerId)
+              val newControllers = controllers - producerId
+              active(newControllers)
+            case None =>
+              context.log.debug("Unknown {} terminated.", ref)
+              Behaviors.same
+          }
       }
 
   }

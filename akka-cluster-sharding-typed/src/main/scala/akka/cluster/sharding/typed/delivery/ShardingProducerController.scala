@@ -161,6 +161,7 @@ object ShardingProducerController {
       new Settings(
         bufferSize = config.getInt("buffer-size"),
         config.getDuration("internal-ask-timeout").asScala,
+        config.getDuration("resend-first-unconfirmed-idle-timeout").asScala,
         ProducerController.Settings(config))
     }
 
@@ -182,6 +183,7 @@ object ShardingProducerController {
   final class Settings private (
       val bufferSize: Int,
       val internalAskTimeout: FiniteDuration,
+      val resendFirsUnconfirmedIdleTimeout: FiniteDuration,
       val producerControllerSettings: ProducerController.Settings) {
 
     def withBufferSize(newBufferSize: Int): Settings =
@@ -193,6 +195,12 @@ object ShardingProducerController {
     def withInternalAskTimeout(newInternalAskTimeout: java.time.Duration): Settings =
       copy(internalAskTimeout = newInternalAskTimeout.asScala)
 
+    def withResendFirsUnconfirmedIdleTimeout(newResendFirsUnconfirmedIdleTimeout: FiniteDuration): Settings =
+      copy(resendFirsUnconfirmedIdleTimeout = newResendFirsUnconfirmedIdleTimeout)
+
+    def withResendFirsUnconfirmedIdleTimeout(newResendFirsUnconfirmedIdleTimeout: java.time.Duration): Settings =
+      copy(resendFirsUnconfirmedIdleTimeout = newResendFirsUnconfirmedIdleTimeout.asScala)
+
     def withProducerControllerSettings(newProducerControllerSettings: ProducerController.Settings): Settings =
       copy(producerControllerSettings = newProducerControllerSettings)
 
@@ -202,11 +210,12 @@ object ShardingProducerController {
     private def copy(
         bufferSize: Int = bufferSize,
         internalAskTimeout: FiniteDuration = internalAskTimeout,
+        resendFirsUnconfirmedIdleTimeout: FiniteDuration = resendFirsUnconfirmedIdleTimeout,
         producerControllerSettings: ProducerController.Settings = producerControllerSettings) =
-      new Settings(bufferSize, internalAskTimeout, producerControllerSettings)
+      new Settings(bufferSize, internalAskTimeout, resendFirsUnconfirmedIdleTimeout, producerControllerSettings)
 
     override def toString: String =
-      s"Settings($bufferSize,$internalAskTimeout,$producerControllerSettings)"
+      s"Settings($bufferSize,$internalAskTimeout,$resendFirsUnconfirmedIdleTimeout,$producerControllerSettings)"
   }
 
   def apply[A: ClassTag](

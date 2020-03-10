@@ -284,7 +284,7 @@ private class ConsumerControllerImpl[A](
   private def receiveChangedProducer(s: State[A], seqMsg: SequencedMessage[A]): Behavior[InternalCommand] = {
     val seqNr = seqMsg.seqNr
 
-    if (seqMsg.first) {
+    if (seqMsg.first || !resendLost) {
       logChangedProducer(s, seqMsg)
 
       val newRequestedSeqNr = seqMsg.seqNr - 1 + flowControlWindow
@@ -299,6 +299,15 @@ private class ConsumerControllerImpl[A](
           requestedSeqNr = newRequestedSeqNr,
           registering = s.updatedRegistering(seqMsg)),
         seqMsg)
+    } else if (s.receivedSeqNr == 0) {
+      // needed for sharding
+      context.log.debug(
+        "Received SequencedMessage seqNr [{}], from new producer producer [{}] but it wasn't first. Resending.",
+        seqNr,
+        seqMsg.producer)
+      // request resend of all unconfirmed, and mark first
+      seqMsg.producer ! Resend(0)
+      resending(s)
     } else {
       context.log.warnN(
         "Received SequencedMessage seqNr [{}], discarding message because it was from unexpected " +
@@ -308,10 +317,11 @@ private class ConsumerControllerImpl[A](
         s.producerController)
       Behaviors.same
     }
+
   }
 
   private def logChangedProducer(s: State[A], seqMsg: SequencedMessage[A]): Unit = {
-    if (s.producerController == context.system) {
+    if (s.producerController == context.system.deadLetters) {
       context.log.debugN("Associated with new ProducerController [{}], seqNr [{}].", seqMsg.producer, seqMsg.seqNr)
     } else {
       context.log.debugN(

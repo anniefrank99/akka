@@ -54,8 +54,7 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
       // no request to producer since it has unconfirmed to begin with
       producerProbe.expectNoMessage()
 
-      consumerControllerProbe.expectMessage(
-        sequencedMessage(producerId, 3, producerController).copy(first = true)(producerController))
+      consumerControllerProbe.expectMessage(sequencedMessage(producerId, 3, producerController).asFirst)
       consumerControllerProbe.expectNoMessage(50.millis)
       producerController ! ProducerControllerImpl.Request(3L, 13L, true, false)
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 4, producerController))
