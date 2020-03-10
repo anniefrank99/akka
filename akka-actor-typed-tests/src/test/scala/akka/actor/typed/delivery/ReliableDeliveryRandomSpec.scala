@@ -193,5 +193,3 @@ class ReliableDeliveryRandomSpec extends ScalaTestWithActorTestKit with AnyWordS
   }
 
 }
-
-// FIXME test failure: https://jenkins.akka.io:8498/job/pr-validator-per-commit-jenkins/18937/consoleText

@@ -11,6 +11,7 @@ import scala.reflect.ClassTag
 import scala.util.Failure
 import scala.util.Success
 
+import akka.actor.DeadLetterSuppression
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
 import akka.actor.typed.delivery.ConsumerController
@@ -83,13 +84,17 @@ object ProducerControllerImpl {
 
   final case class Request(confirmedSeqNr: SeqNr, requestUpToSeqNr: SeqNr, supportResend: Boolean, viaTimeout: Boolean)
       extends InternalCommand
-      with DeliverySerializable {
+      with DeliverySerializable
+      with DeadLetterSuppression {
     require(
       confirmedSeqNr <= requestUpToSeqNr,
       s"confirmedSeqNr [$confirmedSeqNr] should be <= requestUpToSeqNr [$requestUpToSeqNr]")
   }
-  final case class Resend(fromSeqNr: SeqNr) extends InternalCommand with DeliverySerializable
-  final case class Ack(confirmedSeqNr: SeqNr) extends InternalCommand with DeliverySerializable
+  final case class Resend(fromSeqNr: SeqNr) extends InternalCommand with DeliverySerializable with DeadLetterSuppression
+  final case class Ack(confirmedSeqNr: SeqNr)
+      extends InternalCommand
+      with DeliverySerializable
+      with DeadLetterSuppression
 
   private case class Msg[A](msg: A) extends InternalCommand
   private case object ResendFirst extends InternalCommand

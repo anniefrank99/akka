@@ -8,6 +8,7 @@ import java.time.{ Duration => JavaDuration }
 
 import scala.concurrent.duration._
 
+import akka.actor.DeadLetterSuppression
 import akka.actor.typed.ActorRef
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
@@ -107,20 +108,7 @@ object ConsumerController {
   final case class RegisterToProducerController[A](producerController: ActorRef[ProducerController.Command[A]])
       extends Command[A]
 
-  @DoNotInherit
-  trait DeliverThenStop extends UnsealedInternalCommand
-
-  /**
-   * Deliver buffered messages and stop when all have been delivered and confirmed.
-   * Additional incoming messages will also be delivered but it will not request any more.
-   */
-  case object DeliverThenStop extends DeliverThenStop {
-
-    /**
-     * Java API: the singleton instance of the DeliverThenStop message
-     */
-    def getInstance: Confirmed = Confirmed
-  }
+  final case class DeliverThenStop[A]() extends Command[A]
 
   /**
    * This is used between the `ProducerController` and `ConsumerController`. Should rarely be used in
@@ -129,13 +117,14 @@ object ConsumerController {
    */
   final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, message: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
-      @InternalApi private[akka] val producer: ActorRef[ProducerControllerImpl.InternalCommand])
+      @InternalApi private[akka] val producerController: ActorRef[ProducerControllerImpl.InternalCommand])
       extends Command[A]
-      with DeliverySerializable {
+      with DeliverySerializable
+      with DeadLetterSuppression {
 
     /** INTERNAL API */
     @InternalApi private[akka] def asFirst: SequencedMessage[A] =
-      copy(first = true)(producer)
+      copy(first = true)(producerController)
   }
 
   // TODO can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.

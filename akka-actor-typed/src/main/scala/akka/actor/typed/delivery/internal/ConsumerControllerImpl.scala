@@ -88,12 +88,12 @@ import akka.annotation.InternalApi
       seqMsg.seqNr == receivedSeqNr + 1
 
     def isProducerChanged(seqMsg: SequencedMessage[A]): Boolean =
-      seqMsg.producer != producerController || receivedSeqNr == 0
+      seqMsg.producerController != producerController || receivedSeqNr == 0
 
     def updatedRegistering(seqMsg: SequencedMessage[A]): Option[ActorRef[ProducerController.Command[A]]] = {
       registering match {
         case None          => None
-        case s @ Some(reg) => if (seqMsg.producer == reg) None else s
+        case s @ Some(reg) => if (seqMsg.producerController == reg) None else s
       }
     }
   }
@@ -132,11 +132,11 @@ import akka.annotation.InternalApi
                     stashBuffer.stash(seqMsg)
                     Behaviors.same
 
-                  case DeliverThenStop =>
+                  case d: DeliverThenStop[_] =>
                     if (stashBuffer.isEmpty) {
                       Behaviors.stopped
                     } else {
-                      stashBuffer.stash(DeliverThenStop)
+                      stashBuffer.stash(d)
                       Behaviors.same
                     }
 
@@ -241,7 +241,7 @@ private class ConsumerControllerImpl[A](
               expectedSeqNr,
               if (resendLost) "requesting resend from expected seqNr" else "delivering to consumer anyway")
             if (resendLost) {
-              seqMsg.producer ! Resend(fromSeqNr = expectedSeqNr)
+              seqMsg.producerController ! Resend(fromSeqNr = expectedSeqNr)
               resending(s)
             } else {
               s.consumer ! Delivery(seqMsg.message, context.self, pid, seqNr)
@@ -270,7 +270,7 @@ private class ConsumerControllerImpl[A](
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => active(newState))
 
-        case DeliverThenStop =>
+        case _: DeliverThenStop[_] =>
           receiveDeliverThenStop(s, newState => active(newState))
 
         case _: UnsealedInternalCommand =>
@@ -289,11 +289,11 @@ private class ConsumerControllerImpl[A](
 
       val newRequestedSeqNr = seqMsg.seqNr - 1 + flowControlWindow
       context.log.debug("Sending Request with requestUpToSeqNr [{}] after first SequencedMessage.", newRequestedSeqNr)
-      seqMsg.producer ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
+      seqMsg.producerController ! Request(confirmedSeqNr = 0L, newRequestedSeqNr, resendLost, viaTimeout = false)
 
       deliver(
         s.copy(
-          producerController = seqMsg.producer,
+          producerController = seqMsg.producerController,
           receivedSeqNr = seqNr,
           confirmedSeqNr = 0L,
           requestedSeqNr = newRequestedSeqNr,
@@ -304,16 +304,16 @@ private class ConsumerControllerImpl[A](
       context.log.debug(
         "Received SequencedMessage seqNr [{}], from new producer producer [{}] but it wasn't first. Resending.",
         seqNr,
-        seqMsg.producer)
+        seqMsg.producerController)
       // request resend of all unconfirmed, and mark first
-      seqMsg.producer ! Resend(0)
+      seqMsg.producerController ! Resend(0)
       resending(s)
     } else {
       context.log.warnN(
         "Received SequencedMessage seqNr [{}], discarding message because it was from unexpected " +
         "producer [{}] when expecting [{}].",
         seqNr,
-        seqMsg.producer,
+        seqMsg.producerController,
         s.producerController)
       Behaviors.same
     }
@@ -322,12 +322,15 @@ private class ConsumerControllerImpl[A](
 
   private def logChangedProducer(s: State[A], seqMsg: SequencedMessage[A]): Unit = {
     if (s.producerController == context.system.deadLetters) {
-      context.log.debugN("Associated with new ProducerController [{}], seqNr [{}].", seqMsg.producer, seqMsg.seqNr)
+      context.log.debugN(
+        "Associated with new ProducerController [{}], seqNr [{}].",
+        seqMsg.producerController,
+        seqMsg.seqNr)
     } else {
       context.log.debugN(
         "Changing ProducerController from [{}] to [{}], seqNr [{}].",
         s.producerController,
-        seqMsg.producer,
+        seqMsg.producerController,
         seqMsg.seqNr)
     }
   }
@@ -385,7 +388,7 @@ private class ConsumerControllerImpl[A](
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => active(newState))
 
-        case DeliverThenStop =>
+        case _: DeliverThenStop[_] =>
           receiveDeliverThenStop(s, newState => resending(newState))
 
         case _: UnsealedInternalCommand =>
@@ -449,7 +452,7 @@ private class ConsumerControllerImpl[A](
           }
 
         case msg: SequencedMessage[A] =>
-          if (msg.seqNr == seqMsg.seqNr && msg.producer == seqMsg.producer) {
+          if (msg.seqNr == seqMsg.seqNr && msg.producerController == seqMsg.producerController) {
             context.log.debug("Received duplicate SequencedMessage seqNr [{}].", msg.seqNr)
           } else if (stashBuffer.isFull) {
             // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
@@ -479,7 +482,7 @@ private class ConsumerControllerImpl[A](
         case reg: RegisterToProducerController[A] =>
           receiveRegisterToProducerController(s, reg, newState => waitingForConfirmation(newState, seqMsg))
 
-        case DeliverThenStop =>
+        case _: DeliverThenStop[_] =>
           receiveDeliverThenStop(s, newState => waitingForConfirmation(newState, seqMsg))
 
         case _: UnsealedInternalCommand =>

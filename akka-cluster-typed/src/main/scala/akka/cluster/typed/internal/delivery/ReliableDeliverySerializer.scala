@@ -75,7 +75,7 @@ import akka.serialization.SerializerWithStringManifest
     b.setSeqNr(m.seqNr)
     b.setFirst(m.first)
     b.setAck(m.ack)
-    b.setProducerControllerRef(resolver.toSerializationFormat(m.producer))
+    b.setProducerControllerRef(resolver.toSerializationFormat(m.producerController))
     b.setMessage(payloadSupport.payloadBuilder(m.message))
     b.build().toByteArray()
   }

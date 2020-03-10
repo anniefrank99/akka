@@ -505,7 +505,7 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       consumerController ! sequencedMessage(producerId, 3, producerControllerProbe.ref)
       consumerController ! sequencedMessage(producerId, 4, producerControllerProbe.ref)
 
-      consumerController ! DeliverThenStop
+      consumerController ! DeliverThenStop()
 
       consumerController ! ConsumerController.Confirmed // 2
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].message should ===(

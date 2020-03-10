@@ -10,6 +10,7 @@ import scala.concurrent.duration._
 
 import akka.Done
 import akka.actor.testkit.typed.scaladsl.LogCapturing
+import akka.actor.testkit.typed.scaladsl.LoggingTestKit
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import akka.actor.typed.ActorRef
 import akka.actor.typed.Behavior
@@ -241,7 +242,7 @@ class ReliableDeliveryShardingSpec
 
       val seq1 = shardingProbe.receiveMessage().message
       seq1.message should ===(TestConsumer.Job("msg-1"))
-      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
+      seq1.producerController ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next2 = producerProbe.receiveMessage()
       next2.entitiesWithDemand should ===(Set("entity-1"))
@@ -284,14 +285,14 @@ class ReliableDeliveryShardingSpec
       producerProbe.expectNoMessage()
       val seq7 = shardingProbe.receiveMessage().message
       seq7.message should ===(TestConsumer.Job("msg-7"))
-      seq7.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
+      seq7.producerController ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       val next8 = producerProbe.receiveMessage()
       next8.entitiesWithDemand should ===(Set("entity-2"))
       next8.bufferedForEntitiesWithoutDemand should ===(Map("entity-1" -> 1))
 
       // when new demand the buffered messages will be be sent
-      seq5.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, requestUpToSeqNr = 10, true, false)
+      seq5.producerController ! ProducerControllerImpl.Request(confirmedSeqNr = 5L, requestUpToSeqNr = 10, true, false)
       val seq6 = shardingProbe.receiveMessage().message
       seq6.message should ===(TestConsumer.Job("msg-6"))
 
@@ -317,7 +318,7 @@ class ReliableDeliveryShardingSpec
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
       val seq1 = shardingProbe.receiveMessage().message
       seq1.message should ===(TestConsumer.Job("msg-1"))
-      seq1.producer ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
+      seq1.producerController ! ProducerControllerImpl.Request(confirmedSeqNr = 0L, requestUpToSeqNr = 5, true, false)
 
       producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
       shardingProbe.receiveMessage().message.message should ===(TestConsumer.Job("msg-2"))
@@ -449,6 +450,64 @@ class ReliableDeliveryShardingSpec
 
       consumerProbe.stop()
       testKit.stop(shardingProducerController)
+    }
+
+    "cleanup ConsumerController when ProducerController is terminated" in {
+      nextId()
+
+      val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
+
+      val typeKey = EntityTypeKey[SequencedMessage[TestConsumer.Job]](s"TestConsumer-$idCount")
+      val region = ClusterSharding(system).init(Entity(typeKey)(_ =>
+        ShardingConsumerController[TestConsumer.Job, TestConsumer.Command] { cc =>
+          cc ! ConsumerController.Start(consumerProbe.ref)
+          Behaviors.empty
+        }))
+
+      val shardingProducerController1 =
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, region, None), s"shardingController-$idCount")
+      val producerProbe = createTestProbe[ShardingProducerController.RequestNext[TestConsumer.Job]]()
+      shardingProducerController1 ! ShardingProducerController.Start(producerProbe.ref)
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-1"))
+      val delivery1 = consumerProbe.receiveMessage()
+      delivery1.message should ===(TestConsumer.Job("msg-1"))
+      delivery1.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-2"))
+      val delivery2 = consumerProbe.receiveMessage()
+      delivery2.message should ===(TestConsumer.Job("msg-2"))
+      delivery2.confirmTo ! ConsumerController.Confirmed
+      producerProbe.receiveMessage()
+
+      LoggingTestKit.empty
+        .withMessageRegex("ProducerController.*terminated")
+        .withLoggerName("akka.cluster.sharding.typed.delivery.ShardingConsumerController")
+        .expect {
+          testKit.stop(shardingProducerController1)
+        }
+
+      val shardingProducerController2 =
+        spawn(ShardingProducerController[TestConsumer.Job](producerId, region, None), s"shardingController-$idCount")
+      shardingProducerController2 ! ShardingProducerController.Start(producerProbe.ref)
+
+      LoggingTestKit
+        .debug("Starting ConsumerController")
+        .withLoggerName("akka.cluster.sharding.typed.delivery.ShardingConsumerController")
+        .expect {
+          producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-3"))
+        }
+      val delivery3 = consumerProbe.receiveMessage()
+      delivery3.message should ===(TestConsumer.Job("msg-3"))
+      delivery3.confirmTo ! ConsumerController.Confirmed
+
+      producerProbe.receiveMessage().sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job("msg-4"))
+      val delivery4 = consumerProbe.receiveMessage()
+      delivery4.message should ===(TestConsumer.Job("msg-4"))
+      delivery4.confirmTo ! ConsumerController.Confirmed
+
+      consumerProbe.stop()
+      testKit.stop(shardingProducerController2)
     }
 
   }

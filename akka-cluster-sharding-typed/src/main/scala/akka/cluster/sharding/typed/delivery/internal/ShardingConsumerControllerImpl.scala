@@ -9,6 +9,7 @@ import akka.actor.typed.Behavior
 import akka.actor.typed.Terminated
 import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.internal.ConsumerControllerImpl
+import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.InternalApi
@@ -43,7 +44,7 @@ import akka.cluster.sharding.typed.delivery.ShardingConsumerController
             context.unwatch(consumer)
             context.watch(start.deliverTo)
             stashBuffer.unstashAll(
-              new ShardingConsumerControllerImpl[A](context, start.deliverTo, settings).active(Map.empty))
+              new ShardingConsumerControllerImpl[A](context, start.deliverTo, settings).active(Map.empty, Map.empty))
           case other =>
             stashBuffer.stash(other)
             Behaviors.same
@@ -64,25 +65,38 @@ private class ShardingConsumerControllerImpl[A](
     settings: ShardingConsumerController.Settings) {
 
   def active(
-      controllers: Map[String, ActorRef[ConsumerController.Command[A]]]): Behavior[ConsumerController.Command[A]] = {
+      // ProducerController -> producerId
+      producerControllers: Map[ActorRef[ProducerControllerImpl.InternalCommand], String],
+      // producerId -> ConsumerController
+      consumerControllers: Map[String, ActorRef[ConsumerController.Command[A]]])
+      : Behavior[ConsumerController.Command[A]] = {
 
     Behaviors
       .receiveMessagePartial[ConsumerController.Command[A]] {
         case seqMsg: ConsumerController.SequencedMessage[A] =>
-          controllers.get(seqMsg.producerId) match {
+          def updatedProducerControllers(): Map[ActorRef[ProducerControllerImpl.InternalCommand], String] = {
+            producerControllers.get(seqMsg.producerController) match {
+              case Some(_) =>
+                producerControllers
+              case None =>
+                context.watch(seqMsg.producerController)
+                producerControllers.updated(seqMsg.producerController, seqMsg.producerId)
+            }
+          }
+
+          consumerControllers.get(seqMsg.producerId) match {
             case Some(c) =>
               c ! seqMsg
-              Behaviors.same
+              active(updatedProducerControllers(), consumerControllers)
             case None =>
               context.log.debug("Starting ConsumerController for producerId [{}].", seqMsg.producerId)
               val cc = context.spawn(
                 ConsumerController[A](settings.consumerControllerSettings),
                 s"consumerController-${seqMsg.producerId}")
-              // FIXME watch msg.producerController to cleanup terminated producers
               context.watch(cc)
               cc ! ConsumerController.Start(deliverTo)
               cc ! seqMsg
-              active(controllers.updated(seqMsg.producerId, cc))
+              active(updatedProducerControllers(), consumerControllers.updated(seqMsg.producerId, cc))
           }
       }
       .receiveSignal {
@@ -90,14 +104,25 @@ private class ShardingConsumerControllerImpl[A](
           context.log.debug("Consumer terminated.")
           Behaviors.stopped
         case (_, Terminated(ref)) =>
-          controllers.find { case (_, cc) => ref == cc } match {
-            case Some((producerId, _)) =>
-              context.log.debug("ConsumerController for producerId [{}] terminated.", producerId)
-              val newControllers = controllers - producerId
-              active(newControllers)
+          val producerControllerRef = ref.unsafeUpcast[ProducerControllerImpl.InternalCommand]
+          producerControllers.get(producerControllerRef) match {
+            case Some(producerId) =>
+              context.log.debug("ProducerController for producerId [{}] terminated.", producerId)
+              val newControllers = producerControllers - producerControllerRef
+              consumerControllers.get(producerId).foreach { cc =>
+                cc ! ConsumerController.DeliverThenStop()
+              }
+              active(newControllers, consumerControllers)
             case None =>
-              context.log.debug("Unknown {} terminated.", ref)
-              Behaviors.same
+              consumerControllers.find { case (_, cc) => ref == cc } match {
+                case Some((producerId, _)) =>
+                  context.log.debug("ConsumerController for producerId [{}] terminated.", producerId)
+                  val newControllers = consumerControllers - producerId
+                  active(producerControllers, newControllers)
+                case None =>
+                  context.log.debug("Unknown {} terminated.", ref)
+                  Behaviors.same
+              }
           }
       }
 
