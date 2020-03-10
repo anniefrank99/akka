@@ -26,12 +26,12 @@ To use reliable delivery, add the module to your project:
 ## Introduction
 
 Normal @ref:[message delivery reliability](../general/message-delivery-reliability.md) is at-most once delivery, which
-means that means that messages may be lost. That should be rare, but still possible.
+means that messages may be lost. That should be rare, but still possible.
 
 For interactions between some actors that is not acceptable and at-least once delivery or effectively once processing
 is needed. The tools for reliable delivery described here help with implementing that. It can't be achieved
 automatically under the hood without collaboration from the application because confirming when a message has been
-fully processed is business level concern. Only ensuring that it was transferred over the network or delivered to 
+fully processed is a business level concern. Only ensuring that it was transferred over the network or delivered to 
 the mailbox of the actor would not be enough, since it may crash right after without being processed.
 
 Lost messages are detected, resent and deduplicated as needed. In addition, it also includes flow control for
@@ -84,8 +84,8 @@ for termination.
 Received messages from the producer are wrapped in `ConsumerController.Delivery` when sent to the consumer,
 which is supposed to reply with `ConsumerController.Confirmed` when it has processed the message.
 Next message is not delivered until the previous is confirmed. More messages from the producer that arrive
-while waiting for the confirmation are stashed by the `ConsumerController` and delivered when previous
-message was confirmed.
+while waiting for the confirmation are stashed by the `ConsumerController` and delivered when the previous
+message is confirmed.
 
 The consumer and the `ConsumerController` actors are supposed to be local so that these messages are fast
 and not lost.
@@ -150,10 +150,10 @@ message to the `WorkPullingProducerController`.
 The `WorkPullingProducerController` sends `RequestNext` to the producer, which is then allowed
 to send one message to the `WorkPullingProducerController`.
 Thereafter the producer will receive a new `RequestNext` when it's allowed to send one more message.
-It will send a new `RequestNext` when there are demand from any worker.
+`WorkPullingProducerController` will send a new `RequestNext` when there is a demand from any worker.
 It's possible that all workers with demand are deregistered after the `RequestNext` is sent and before
 the actual messages is sent to the `WorkPullingProducerController`. In that case the message is
-buffered and will be delivered when a new worker is registered or when there is new demand.
+buffered and will be delivered when a new worker is registered or when there is a new demand.
 
 The producer and `WorkPullingProducerController` actors are supposed to be local so that these messages are
 fast and not lost.
@@ -164,8 +164,8 @@ initial `ConsumerController.Start` message to the `ConsumerController`.
 Received messages from the producer are wrapped in `ConsumerController.Delivery` when sent to the consumer,
 which is supposed to reply with `ConsumerController.Confirmed` when it has processed the message.
 Next message is not delivered until the previous is confirmed. More messages from the producer that arrive
-while waiting for the confirmation are stashed by the `ConsumerController` and delivered when previous
-message was confirmed.
+while waiting for the confirmation are stashed by the `ConsumerController` and delivered when the previous
+message is confirmed.
 
 The consumer and the `ConsumerController` actors are supposed to be local so that these messages are fast
 and not lost.
