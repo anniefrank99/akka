@@ -4,6 +4,8 @@
 
 package docs.delivery
 
+import java.util.UUID
+
 import scala.concurrent.duration._
 import scala.util.Failure
 import scala.util.Success
@@ -26,7 +28,7 @@ object WorkPullingDocExample {
 
   object ImageConverter {
     sealed trait Command
-    final case class ConversionJob(fromFormat: String, toFormat: String, image: Array[Byte])
+    final case class ConversionJob(resultId: UUID, fromFormat: String, toFormat: String, image: Array[Byte])
     private case class WrappedDelivery(d: ConsumerController.Delivery[ConversionJob]) extends Command
 
     val serviceKey = ServiceKey[ConsumerController.Command[ConversionJob]]("ImageConverter")
@@ -45,6 +47,7 @@ object WorkPullingDocExample {
             val fromFormat = delivery.message.fromFormat
             val toFormat = delivery.message.toFormat
             // convert image...
+            // store result with resultId key for later retrieval
 
             // and when completed confirm
             delivery.confirmTo ! ConsumerController.Confirmed
@@ -69,6 +72,8 @@ object WorkPullingDocExample {
     private case class WrappedRequestNext(r: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob])
         extends Command
 
+    final case class GetResult(resultId: UUID, replyTo: ActorRef[Option[Array[Byte]]]) extends Command
+
     //#producer
 
     //#ask
@@ -80,11 +85,12 @@ object WorkPullingDocExample {
         extends Command
 
     sealed trait ConvertResponse
-    case object ConvertAccepted extends ConvertResponse
+    final case class ConvertAccepted(resultId: UUID) extends ConvertResponse
     case object ConvertRejected extends ConvertResponse
-    case object ConvertTimedOut extends ConvertResponse
+    final case class ConvertTimedOut(resultId: UUID) extends ConvertResponse
 
-    private final case class AskReply(originalReplyTo: ActorRef[ConvertResponse], timeout: Boolean) extends Command
+    private final case class AskReply(resultId: UUID, originalReplyTo: ActorRef[ConvertResponse], timeout: Boolean)
+        extends Command
     //#ask
 
     //#producer
@@ -142,6 +148,9 @@ object WorkPullingDocExample {
             stashBuffer.stash(c)
             Behaviors.same
           }
+        case GetResult(resultId, replyTo) =>
+          // TODO retrieve the stored result and reply
+          Behaviors.same
       }
     }
 
@@ -149,8 +158,12 @@ object WorkPullingDocExample {
         next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
       Behaviors.receiveMessage {
         case Convert(from, to, image) =>
-          next.sendNextTo ! ImageConverter.ConversionJob(from, to, image)
+          val resultId = UUID.randomUUID()
+          next.sendNextTo ! ImageConverter.ConversionJob(resultId, from, to, image)
           waitForNext()
+        case GetResult(resultId, replyTo) =>
+          // TODO retrieve the stored result and reply
+          Behaviors.same
         case _: WrappedRequestNext =>
           throw new IllegalStateException("Unexpected RequestNext")
       }
@@ -175,9 +188,12 @@ object WorkPullingDocExample {
             stashBuffer.stash(c)
             Behaviors.same
           }
-        case AskReply(originalReplyTo, timeout) =>
-          val response = if (timeout) ConvertTimedOut else ConvertAccepted
+        case AskReply(resultId, originalReplyTo, timeout) =>
+          val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
           originalReplyTo ! response
+          Behaviors.same
+        case GetResult(resultId, replyTo) =>
+          // TODO retrieve the stored result and reply
           Behaviors.same
       }
     }
@@ -186,16 +202,21 @@ object WorkPullingDocExample {
         next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
       Behaviors.receiveMessage {
         case ConvertRequest(from, to, image, originalReplyTo) =>
+          val resultId = UUID.randomUUID()
           context.ask[MessageWithConfirmation[ImageConverter.ConversionJob], Done](
             next.askNextTo,
-            askReplyTo => MessageWithConfirmation(ImageConverter.ConversionJob(from, to, image), askReplyTo)) {
-            case Success(done) => AskReply(originalReplyTo, timeout = false)
-            case Failure(_)    => AskReply(originalReplyTo, timeout = true)
+            askReplyTo =>
+              MessageWithConfirmation(ImageConverter.ConversionJob(resultId, from, to, image), askReplyTo)) {
+            case Success(done) => AskReply(resultId, originalReplyTo, timeout = false)
+            case Failure(_)    => AskReply(resultId, originalReplyTo, timeout = true)
           }
           waitForNext2()
-        case AskReply(originalReplyTo, timeout) =>
-          val response = if (timeout) ConvertTimedOut else ConvertAccepted
+        case AskReply(resultId, originalReplyTo, timeout) =>
+          val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
           originalReplyTo ! response
+          Behaviors.same
+        case GetResult(resultId, replyTo) =>
+          // TODO retrieve the stored result and reply
           Behaviors.same
         case _: WrappedRequestNext =>
           throw new IllegalStateException("Unexpected RequestNext")

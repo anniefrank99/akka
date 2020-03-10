@@ -94,6 +94,8 @@ Many unconfirmed messages can be in flight between the `ProducerController` and 
 it is limited by a flow control window. The flow control is driven by the consumer side, which means that
 the `ProducerController` will not send faster than the demand requested by the `ConsumerController`.
 
+### Point-to-point example
+
 FIXME example
  
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
@@ -102,8 +104,8 @@ Note how the `ActorRef` in the `Start` messages are constructed as message adapt
 ### Point-to-point delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order
-as they were sent without loss or duplicates. Meaning effectively once processing without any business level
-deduplication.
+as they were sent as they were sent to the `ProducerController`, without loss or duplicates. Meaning effectively
+once processing without any business level deduplication.
 
 Unconfirmed messages may be lost if the producer crashes. To avoid that you need to enable the @ref:[durable
 queue](#durable-producer) on the producer side. The stored unconfirmed messages will be redelivered when the
@@ -173,6 +175,8 @@ Many unconfirmed messages can be in flight between the `WorkPullingProducerContr
 consumer side, which means that the `WorkPullingProducerController` will not send faster than the
 demand requested by the workers.
 
+### Work pulling example
+
 Example of image converter worker (consumer):
 
 Scala
@@ -191,7 +195,7 @@ Note how the `ActorRef` in the `Start` messages are constructed as message adapt
 ### Work pulling delivery semantics
 
 For work pulling the order of the messages should not matter, because each message is routed randomly
-to one of the workers with demand.
+to one of the workers with demand and can therefore be processed in any order.
 
 As long as neither producers nor workers crash (or workers being removed for other reasons) the messages are
 delivered to the workers without loss or duplicates. Meaning effectively once processing without any
@@ -207,6 +211,14 @@ If a worker crashes or is stopped gracefully the unconfirmed messages will be re
 In that case some of these may already have been processed by the previous worker. Meaning at-least once delivery.
 
 ## Sharding
+
+To use reliable delivery with Cluster Sharding, add the following module to your project:
+
+@@dependency[sbt,Maven,Gradle] {
+  group=com.typesafe.akka
+  artifact=akka-cluster-sharding-typed_$scala.binary_version$
+  version=$akka.version$
+}
 
 Reliable delivery between a producer actor sending messages to @ref:[sharded](cluster-sharding.md) consumer
 actor receiving the messages.
@@ -252,6 +264,11 @@ flight between the `ShardingProducerController` and each `ShardingConsumerContro
 limited by a flow control window. The flow control is driven by the consumer side, which means that
 the `ShardingProducerController` will not send faster than the demand requested by the consumers.
 
+### Sharding example
+
+The sharded entity is a todo list which uses an async database call to store its entire state on each change,
+and first when that completes replies to reliable delivery that the message was consumed.
+
 Example of `TodoList` entity (consumer):
 
 Scala
@@ -275,8 +292,8 @@ FIXME Java example
 ### Sharding delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order
-as they were sent without loss or duplicates. Meaning effectively once processing without any business level
-deduplication.
+as they were sent to the `ShardingProducerController`, without loss or duplicates. Meaning effectively once
+processing without any business level deduplication.
 
 Unconfirmed messages may be lost if the producer crashes. To avoid that you need to enable the @ref:[durable
 queue](#durable-producer) on the producer side. The stored unconfirmed messages will be redelivered when the
