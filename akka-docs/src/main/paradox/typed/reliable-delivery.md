@@ -96,10 +96,29 @@ the `ProducerController` will not send faster than the demand requested by the `
 
 ### Point-to-point example
 
-FIXME example
- 
-Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
-`RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
+An example of a fibonacci number generator (producer):
+
+Scala
+:  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #imports #producer }
+
+and consumer of the fibonacci numbers:
+
+Scala
+:  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #consumer }
+
+The `FibonacciProducer` sends the messages to a `ProducerController`. The `FibonacciConsumer` receives the messages
+from a `ConsumerController`. Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map
+the `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
+
+The `ConsumerController` and `ProducerController` are connected via the `ConsumerController.RegisterToProducerController`
+message. The `ActorRef` of the `ProducerController` can be shared between producer and consumer sides with ordinary
+messages, or by using the `Receptionist`. Alternatively, they can be connected in the other direction by sending
+`ProducerController.RegisterConsumer` to the `ProducerController`.
+
+Scala
+:  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #connect }
+
+FIXME Java example
 
 ### Point-to-point delivery semantics
 
