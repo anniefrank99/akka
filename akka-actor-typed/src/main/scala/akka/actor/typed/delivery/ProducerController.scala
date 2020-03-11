@@ -6,7 +6,6 @@ package akka.actor.typed.delivery
 
 import java.time.{ Duration => JavaDuration }
 import java.util.Optional
-import java.util.function.{ Consumer => JConsumer }
 
 import scala.compat.java8.OptionConverters._
 import scala.concurrent.duration._
@@ -19,6 +18,7 @@ import akka.actor.typed.delivery.internal.DeliverySerializable
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import akka.actor.typed.scaladsl.Behaviors
 import akka.annotation.ApiMayChange
+import akka.annotation.InternalApi
 import akka.util.JavaDurationConverters._
 import com.typesafe.config.Config
 
@@ -210,12 +210,18 @@ object ProducerController {
   }
 
   /**
+   * INTERNAL API
+   *
    * For custom `send` function. For example used with Sharding where the message must be wrapped in
    * `ShardingEnvelope(SequencedMessage(msg))`.
    *
    * When this factory is used the [[RegisterConsumer]] is not needed.
+   *
+   * In the future we may make the custom `send` in `ProducerController` public to make it possible to
+   * wrap it or send it in other ways when building higher level abstractions that are using the `ProducerController`.
+   * That is used by `ShardingProducerController`.
    */
-  def apply[A: ClassTag](
+  @InternalApi private[akka] def apply[A: ClassTag](
       producerId: String,
       durableQueueBehavior: Option[Behavior[DurableProducerQueue.Command[A]]],
       settings: Settings,
@@ -242,19 +248,6 @@ object ProducerController {
       durableQueueBehavior: Optional[Behavior[DurableProducerQueue.Command[A]]],
       settings: Settings): Behavior[Command[A]] = {
     apply(producerId, durableQueueBehavior.asScala, settings)(ClassTag(messageClass))
-  }
-
-  /**
-   * Java API: For custom `send` function. For example used with Sharding where the message must be wrapped in
-   * `ShardingEnvelope(SequencedMessage(msg))`.
-   */
-  def create[A](
-      messageClass: Class[A],
-      producerId: String,
-      durableQueueBehavior: Optional[Behavior[DurableProducerQueue.Command[A]]],
-      settings: Settings,
-      send: JConsumer[ConsumerController.SequencedMessage[A]]): Behavior[Command[A]] = {
-    apply(producerId, durableQueueBehavior.asScala, settings, send.accept)(ClassTag(messageClass))
   }
 
 }

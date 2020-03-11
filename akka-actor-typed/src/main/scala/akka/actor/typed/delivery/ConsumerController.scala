@@ -112,8 +112,12 @@ object ConsumerController {
 
   /**
    * This is used between the `ProducerController` and `ConsumerController`. Should rarely be used in
-   * application code but is public because it's possible to wrap it or send it in other ways when
-   * building higher level abstractions that are using the `ProducerController`.
+   * application code but is public because it's in the signature for the `EntityTypeKey` when using
+   * `ShardingConsumerController`.
+   *
+   * In the future we may also make the custom `send` in `ProducerController` public to make it possible to
+   * wrap it or send it in other ways when building higher level abstractions that are using the `ProducerController`.
+   * That is used by `ShardingProducerController`.
    */
   final case class SequencedMessage[A](producerId: String, seqNr: SeqNr, message: A, first: Boolean, ack: Boolean)(
       /** INTERNAL API */
