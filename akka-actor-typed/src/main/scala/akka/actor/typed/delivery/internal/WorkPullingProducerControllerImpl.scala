@@ -213,9 +213,15 @@ import akka.util.Timeout
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
       case other =>
+        checkStashFull(stashBuffer)
         stashBuffer.stash(other)
         Behaviors.same
     }
+  }
+
+  private def checkStashFull[A: ClassTag](stashBuffer: StashBuffer[InternalCommand]): Unit = {
+    if (stashBuffer.isFull)
+      throw new IllegalArgumentException(s"Buffer is full, size [${stashBuffer.size}].")
   }
 
   private def askLoadState[A: ClassTag](
@@ -309,6 +315,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
           selectWorker() match {
             case Some(w) => Right(w)
             case None =>
+              checkStashFull(stashBuffer)
               context.log.debug("Stashing message, seqNr [{}]", totalSeqNr)
               stashBuffer.stash(Msg(msg, wasStashed = true, replyTo))
               val newRequested = if (wasStashed) s.requested else false
@@ -404,6 +411,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
                 s.preselectedWorkers.updated(s.currentSeqNr, PreselectedWorker(outKey, out.confirmationQualifier)),
               replyAfterStore = newReplyAfterStore))
         case None =>
+          checkStashFull(stashBuffer)
           // no demand from any workers, or all already preselected
           context.log.debug("Stash before storage, seqNr [{}]", s.currentSeqNr)
           // not stored yet, so don't treat it as stashed
@@ -425,6 +433,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
                 s.preselectedWorkers.updated(s.currentSeqNr, PreselectedWorker(outKey, out.confirmationQualifier)),
               handOver = s.handOver.updated(s.currentSeqNr, HandOver(resend.oldConfirmationQualifier, resend.oldSeqNr))))
         case None =>
+          checkStashFull(stashBuffer)
           // no demand from any workers, or all already preselected
           context.log.debug("Stash before storage of resent durable message, seqNr [{}].", s.currentSeqNr)
           // not stored yet, so don't treat it as stashed

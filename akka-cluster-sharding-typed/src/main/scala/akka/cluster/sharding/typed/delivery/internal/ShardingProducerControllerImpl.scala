@@ -89,7 +89,12 @@ import akka.util.Timeout
       producer: ActorRef[ShardingProducerController.RequestNext[A]],
       out: Map[OutKey, OutState[A]],
       // replyAfterStore is used when durableQueue is enabled, otherwise they are tracked in OutState
-      replyAfterStore: Map[TotalSeqNr, ActorRef[Done]])
+      replyAfterStore: Map[TotalSeqNr, ActorRef[Done]]) {
+
+    def bufferSize: Long = {
+      out.valuesIterator.foldLeft(0L) { case (acc, outState) => acc + outState.buffered.size }
+    }
+  }
 
   def apply[A: ClassTag](
       producerId: String,
@@ -214,9 +219,15 @@ import akka.util.Timeout
         throw new IllegalStateException("DurableQueue was unexpectedly terminated.")
 
       case other =>
+        checkStashFull(stashBuffer)
         stashBuffer.stash(other)
         Behaviors.same
     }
+  }
+
+  private def checkStashFull[A: ClassTag](stashBuffer: StashBuffer[InternalCommand]): Unit = {
+    if (stashBuffer.isFull)
+      throw new IllegalArgumentException(s"Buffer is full, size [${stashBuffer.size}].")
   }
 
   private def askLoadState[A: ClassTag](
@@ -300,8 +311,12 @@ private class ShardingProducerControllerImpl[A: ClassTag](
               replyAfterStore = newReplyAfterStore)
           case Some(out @ OutState(_, _, None, buffered, _, _, _)) =>
             // no demand, buffer
-            // FIXME limit the buffers.
-            context.log.debug("Buffering message to entityId [{}], buffer size [{}]", entityId, buffered.size + 1)
+            if (s.bufferSize >= settings.bufferSize)
+              throw new IllegalArgumentException(s"Buffer is full, size [${settings.bufferSize}].")
+            context.log.debug(
+              "Buffering message to entityId [{}], buffer size for entity [{}]",
+              entityId,
+              buffered.size + 1)
             val newBuffered = buffered :+ Buffered(totalSeqNr, msg, replyTo)
             val newS =
               s.copy(
@@ -389,9 +404,11 @@ private class ShardingProducerControllerImpl[A: ClassTag](
         case Some(outState) =>
           context.log.trace2("Received Ack, confirmed [{}], current [{}].", ack.confirmedSeqNr, s.currentSeqNr)
           val newUnconfirmed = onAck(outState, ack.confirmedSeqNr)
+          val newUsedNanoTime =
+            if (newUnconfirmed.size != outState.unconfirmed.size) System.nanoTime() else outState.usedNanoTime
           active(
             s.copy(out =
-              s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed, usedNanoTime = System.nanoTime()))))
+              s.out.updated(ack.outKey, outState.copy(unconfirmed = newUnconfirmed, usedNanoTime = newUsedNanoTime))))
         case None =>
           // obsolete Ack, ConsumerController already deregistered
           Behaviors.unhandled
