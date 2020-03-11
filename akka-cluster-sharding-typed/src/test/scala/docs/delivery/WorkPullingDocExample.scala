@@ -169,60 +169,63 @@ object WorkPullingDocExample {
       }
     }
     //#producer
+    object askScope {
+      //#ask
 
-    //#ask
-    import WorkPullingProducerController.MessageWithConfirmation
-    import akka.util.Timeout
+      import WorkPullingProducerController.MessageWithConfirmation
+      import akka.util.Timeout
 
-    implicit val askTimeout: Timeout = 3.seconds
+      implicit val askTimeout: Timeout = 5.seconds
 
-    private def waitForNext2(): Behavior[Command] = {
-      Behaviors.receiveMessage {
-        case WrappedRequestNext(next) =>
-          stashBuffer.unstashAll(active2(next))
-        case c: ConvertRequest =>
-          if (stashBuffer.isFull) {
-            c.replyTo ! ConvertRejected
+      private def waitForNext(): Behavior[Command] = {
+        Behaviors.receiveMessage {
+          case WrappedRequestNext(next) =>
+            stashBuffer.unstashAll(active(next))
+          case c: ConvertRequest =>
+            if (stashBuffer.isFull) {
+              c.replyTo ! ConvertRejected
+              Behaviors.same
+            } else {
+              stashBuffer.stash(c)
+              Behaviors.same
+            }
+          case AskReply(resultId, originalReplyTo, timeout) =>
+            val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
+            originalReplyTo ! response
             Behaviors.same
-          } else {
-            stashBuffer.stash(c)
+          case GetResult(resultId, replyTo) =>
+            // TODO retrieve the stored result and reply
             Behaviors.same
-          }
-        case AskReply(resultId, originalReplyTo, timeout) =>
-          val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
-          originalReplyTo ! response
-          Behaviors.same
-        case GetResult(resultId, replyTo) =>
-          // TODO retrieve the stored result and reply
-          Behaviors.same
+        }
       }
-    }
 
-    private def active2(
-        next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
-      Behaviors.receiveMessage {
-        case ConvertRequest(from, to, image, originalReplyTo) =>
-          val resultId = UUID.randomUUID()
-          context.ask[MessageWithConfirmation[ImageConverter.ConversionJob], Done](
-            next.askNextTo,
-            askReplyTo =>
-              MessageWithConfirmation(ImageConverter.ConversionJob(resultId, from, to, image), askReplyTo)) {
-            case Success(done) => AskReply(resultId, originalReplyTo, timeout = false)
-            case Failure(_)    => AskReply(resultId, originalReplyTo, timeout = true)
-          }
-          waitForNext2()
-        case AskReply(resultId, originalReplyTo, timeout) =>
-          val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
-          originalReplyTo ! response
-          Behaviors.same
-        case GetResult(resultId, replyTo) =>
-          // TODO retrieve the stored result and reply
-          Behaviors.same
-        case _: WrappedRequestNext =>
-          throw new IllegalStateException("Unexpected RequestNext")
+      private def active(
+          next: WorkPullingProducerController.RequestNext[ImageConverter.ConversionJob]): Behavior[Command] = {
+        Behaviors.receiveMessage {
+          case ConvertRequest(from, to, image, originalReplyTo) =>
+            val resultId = UUID.randomUUID()
+            context.ask[MessageWithConfirmation[ImageConverter.ConversionJob], Done](
+              next.askNextTo,
+              askReplyTo =>
+                MessageWithConfirmation(ImageConverter.ConversionJob(resultId, from, to, image), askReplyTo)) {
+              case Success(done) => AskReply(resultId, originalReplyTo, timeout = false)
+              case Failure(_)    => AskReply(resultId, originalReplyTo, timeout = true)
+            }
+            waitForNext()
+          case AskReply(resultId, originalReplyTo, timeout) =>
+            val response = if (timeout) ConvertTimedOut(resultId) else ConvertAccepted(resultId)
+            originalReplyTo ! response
+            Behaviors.same
+          case GetResult(resultId, replyTo) =>
+            // TODO retrieve the stored result and reply
+            Behaviors.same
+          case _: WrappedRequestNext =>
+            throw new IllegalStateException("Unexpected RequestNext")
+        }
       }
+
+      //#ask
     }
-    //#ask
     //#producer
   }
   //#producer

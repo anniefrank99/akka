@@ -208,12 +208,16 @@ Example of image converter worker (consumer):
 Scala
 :  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #imports #consumer }
 
+Java
+:  @@snip [WorkPullingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/WorkPullingDocExample.java) { #imports #consumer }
+
 and image converter job manager (producer):
 
 Scala
-:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #imports #producer }
+:  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #producer }
 
-FIXME Java example
+Java
+:  @@snip [WorkPullingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/WorkPullingDocExample.java) { #producer }
 
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
@@ -351,13 +355,14 @@ When using the `EventSourcedProducerQueue` the following dependency is needed:
 You also have to select journal plugin and snapshot store plugin, see 
 @ref:[Persistence Plugins](../persistence-plugins.md).
 
-Example of the image converter work manager from the @ref:[Work pulling section](#work-pulling) with
+Example of the image converter work manager from the @ref:[Work pulling example](#work-pulling-example) with
 `EventSourcedProducerQueue` enabled:
  
 Scala
 :  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #durable-queue }
 
-FIXME Java example
+Java
+:  @@snip [WorkPullingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/WorkPullingDocExample.java) { #durable-queue }
 
 It's important to note that the `EventSourcedProducerQueue` requires a @ref:[PersistenceId](persistence.md#persistenceid),
 which must be unique. The same `PersistenceId` must not be used for different producers at the same time.
@@ -376,12 +381,13 @@ message has been handled. To include the `replyTo` `ActorRef` the message must b
 has been stored successfully, but it might not have been processed by the consumer yet. Otherwise the
 reply is sent after the consumer has processed and confirmed the message.
 
-Example of using `ask` in the image converter work manager from the @ref:[Work pulling section](#work-pulling):
+Example of using `ask` in the image converter work manager from the @ref:[Work pulling example](#work-pulling-example):
  
 Scala
 :  @@snip [WorkPullingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/WorkPullingDocExample.scala) { #ask }
 
-FIXME Java example
+Java
+:  @@snip [WorkPullingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/WorkPullingDocExample.java) { #ask }
 
 ## Only flow control
 

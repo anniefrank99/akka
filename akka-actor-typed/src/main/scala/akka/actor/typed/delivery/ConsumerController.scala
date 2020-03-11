@@ -84,9 +84,15 @@ object ConsumerController {
 
   /**
    * Java API: The `Class` type for `RequestNext` that can be used when creating a `messageAdapter`
-   * for `Class<RequestNext<MessageType>>`.
+   * for `Class<Delivery<MessageType>>`.
    */
   def deliveryClass[A](): Class[Delivery[A]] = classOf[Delivery[A]]
+
+  /**
+   * Java API: The `Class` type for `RequestNext` that can be used when creating a `ServiceKey`
+   * for `Class<Command<MessageType>>`.
+   */
+  def serviceKeyClass[A]: Class[Command[A]] = classOf[Command[A]]
 
   @DoNotInherit
   trait Confirmed extends UnsealedInternalCommand
