@@ -5307,6 +5307,17 @@ public final class ReliableDelivery {
      */
     akka.protobufv3.internal.ByteString
         getQualifierBytes();
+
+    /**
+     * <code>required int64 timestamp = 3;</code>
+     * @return Whether the timestamp field is set.
+     */
+    boolean hasTimestamp();
+    /**
+     * <code>required int64 timestamp = 3;</code>
+     * @return The timestamp.
+     */
+    long getTimestamp();
   }
   /**
    * <pre>
@@ -5368,6 +5379,11 @@ public final class ReliableDelivery {
               akka.protobufv3.internal.ByteString bs = input.readBytes();
               bitField0_ |= 0x00000002;
               qualifier_ = bs;
+              break;
+            }
+            case 24: {
+              bitField0_ |= 0x00000004;
+              timestamp_ = input.readInt64();
               break;
             }
             default: {
@@ -5465,6 +5481,23 @@ public final class ReliableDelivery {
       }
     }
 
+    public static final int TIMESTAMP_FIELD_NUMBER = 3;
+    private long timestamp_;
+    /**
+     * <code>required int64 timestamp = 3;</code>
+     * @return Whether the timestamp field is set.
+     */
+    public boolean hasTimestamp() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <code>required int64 timestamp = 3;</code>
+     * @return The timestamp.
+     */
+    public long getTimestamp() {
+      return timestamp_;
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -5477,6 +5510,10 @@ public final class ReliableDelivery {
         return false;
       }
       if (!hasQualifier()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      if (!hasTimestamp()) {
         memoizedIsInitialized = 0;
         return false;
       }
@@ -5493,6 +5530,9 @@ public final class ReliableDelivery {
       if (((bitField0_ & 0x00000002) != 0)) {
         akka.protobufv3.internal.GeneratedMessageV3.writeString(output, 2, qualifier_);
       }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        output.writeInt64(3, timestamp_);
+      }
       unknownFields.writeTo(output);
     }
 
@@ -5508,6 +5548,10 @@ public final class ReliableDelivery {
       }
       if (((bitField0_ & 0x00000002) != 0)) {
         size += akka.protobufv3.internal.GeneratedMessageV3.computeStringSize(2, qualifier_);
+      }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        size += akka.protobufv3.internal.CodedOutputStream
+          .computeInt64Size(3, timestamp_);
       }
       size += unknownFields.getSerializedSize();
       memoizedSize = size;
@@ -5534,6 +5578,11 @@ public final class ReliableDelivery {
         if (!getQualifier()
             .equals(other.getQualifier())) return false;
       }
+      if (hasTimestamp() != other.hasTimestamp()) return false;
+      if (hasTimestamp()) {
+        if (getTimestamp()
+            != other.getTimestamp()) return false;
+      }
       if (!unknownFields.equals(other.unknownFields)) return false;
       return true;
     }
@@ -5553,6 +5602,11 @@ public final class ReliableDelivery {
       if (hasQualifier()) {
         hash = (37 * hash) + QUALIFIER_FIELD_NUMBER;
         hash = (53 * hash) + getQualifier().hashCode();
+      }
+      if (hasTimestamp()) {
+        hash = (37 * hash) + TIMESTAMP_FIELD_NUMBER;
+        hash = (53 * hash) + akka.protobufv3.internal.Internal.hashLong(
+            getTimestamp());
       }
       hash = (29 * hash) + unknownFields.hashCode();
       memoizedHashCode = hash;
@@ -5695,6 +5749,8 @@ public final class ReliableDelivery {
         bitField0_ = (bitField0_ & ~0x00000001);
         qualifier_ = "";
         bitField0_ = (bitField0_ & ~0x00000002);
+        timestamp_ = 0L;
+        bitField0_ = (bitField0_ & ~0x00000004);
         return this;
       }
 
@@ -5731,6 +5787,10 @@ public final class ReliableDelivery {
           to_bitField0_ |= 0x00000002;
         }
         result.qualifier_ = qualifier_;
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.timestamp_ = timestamp_;
+          to_bitField0_ |= 0x00000004;
+        }
         result.bitField0_ = to_bitField0_;
         onBuilt();
         return result;
@@ -5788,6 +5848,9 @@ public final class ReliableDelivery {
           qualifier_ = other.qualifier_;
           onChanged();
         }
+        if (other.hasTimestamp()) {
+          setTimestamp(other.getTimestamp());
+        }
         this.mergeUnknownFields(other.unknownFields);
         onChanged();
         return this;
@@ -5799,6 +5862,9 @@ public final class ReliableDelivery {
           return false;
         }
         if (!hasQualifier()) {
+          return false;
+        }
+        if (!hasTimestamp()) {
           return false;
         }
         return true;
@@ -5944,6 +6010,43 @@ public final class ReliableDelivery {
         onChanged();
         return this;
       }
+
+      private long timestamp_ ;
+      /**
+       * <code>required int64 timestamp = 3;</code>
+       * @return Whether the timestamp field is set.
+       */
+      public boolean hasTimestamp() {
+        return ((bitField0_ & 0x00000004) != 0);
+      }
+      /**
+       * <code>required int64 timestamp = 3;</code>
+       * @return The timestamp.
+       */
+      public long getTimestamp() {
+        return timestamp_;
+      }
+      /**
+       * <code>required int64 timestamp = 3;</code>
+       * @param value The timestamp to set.
+       * @return This builder for chaining.
+       */
+      public Builder setTimestamp(long value) {
+        bitField0_ |= 0x00000004;
+        timestamp_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>required int64 timestamp = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearTimestamp() {
+        bitField0_ = (bitField0_ & ~0x00000004);
+        timestamp_ = 0L;
+        onChanged();
+        return this;
+      }
       @java.lang.Override
       public final Builder setUnknownFields(
           final akka.protobufv3.internal.UnknownFieldSet unknownFields) {
@@ -6041,17 +6144,28 @@ public final class ReliableDelivery {
     boolean getAck();
 
     /**
-     * <code>required .Payload message = 4;</code>
+     * <code>required int64 timestamp = 4;</code>
+     * @return Whether the timestamp field is set.
+     */
+    boolean hasTimestamp();
+    /**
+     * <code>required int64 timestamp = 4;</code>
+     * @return The timestamp.
+     */
+    long getTimestamp();
+
+    /**
+     * <code>required .Payload message = 5;</code>
      * @return Whether the message field is set.
      */
     boolean hasMessage();
     /**
-     * <code>required .Payload message = 4;</code>
+     * <code>required .Payload message = 5;</code>
      * @return The message.
      */
     akka.remote.ContainerFormats.Payload getMessage();
     /**
-     * <code>required .Payload message = 4;</code>
+     * <code>required .Payload message = 5;</code>
      */
     akka.remote.ContainerFormats.PayloadOrBuilder getMessageOrBuilder();
   }
@@ -6122,9 +6236,14 @@ public final class ReliableDelivery {
               ack_ = input.readBool();
               break;
             }
-            case 34: {
+            case 32: {
+              bitField0_ |= 0x00000008;
+              timestamp_ = input.readInt64();
+              break;
+            }
+            case 42: {
               akka.remote.ContainerFormats.Payload.Builder subBuilder = null;
-              if (((bitField0_ & 0x00000008) != 0)) {
+              if (((bitField0_ & 0x00000010) != 0)) {
                 subBuilder = message_.toBuilder();
               }
               message_ = input.readMessage(akka.remote.ContainerFormats.Payload.PARSER, extensionRegistry);
@@ -6132,7 +6251,7 @@ public final class ReliableDelivery {
                 subBuilder.mergeFrom(message_);
                 message_ = subBuilder.buildPartial();
               }
-              bitField0_ |= 0x00000008;
+              bitField0_ |= 0x00000010;
               break;
             }
             default: {
@@ -6247,24 +6366,41 @@ public final class ReliableDelivery {
       return ack_;
     }
 
-    public static final int MESSAGE_FIELD_NUMBER = 4;
-    private akka.remote.ContainerFormats.Payload message_;
+    public static final int TIMESTAMP_FIELD_NUMBER = 4;
+    private long timestamp_;
     /**
-     * <code>required .Payload message = 4;</code>
-     * @return Whether the message field is set.
+     * <code>required int64 timestamp = 4;</code>
+     * @return Whether the timestamp field is set.
      */
-    public boolean hasMessage() {
+    public boolean hasTimestamp() {
       return ((bitField0_ & 0x00000008) != 0);
     }
     /**
-     * <code>required .Payload message = 4;</code>
+     * <code>required int64 timestamp = 4;</code>
+     * @return The timestamp.
+     */
+    public long getTimestamp() {
+      return timestamp_;
+    }
+
+    public static final int MESSAGE_FIELD_NUMBER = 5;
+    private akka.remote.ContainerFormats.Payload message_;
+    /**
+     * <code>required .Payload message = 5;</code>
+     * @return Whether the message field is set.
+     */
+    public boolean hasMessage() {
+      return ((bitField0_ & 0x00000010) != 0);
+    }
+    /**
+     * <code>required .Payload message = 5;</code>
      * @return The message.
      */
     public akka.remote.ContainerFormats.Payload getMessage() {
       return message_ == null ? akka.remote.ContainerFormats.Payload.getDefaultInstance() : message_;
     }
     /**
-     * <code>required .Payload message = 4;</code>
+     * <code>required .Payload message = 5;</code>
      */
     public akka.remote.ContainerFormats.PayloadOrBuilder getMessageOrBuilder() {
       return message_ == null ? akka.remote.ContainerFormats.Payload.getDefaultInstance() : message_;
@@ -6286,6 +6422,10 @@ public final class ReliableDelivery {
         return false;
       }
       if (!hasAck()) {
+        memoizedIsInitialized = 0;
+        return false;
+      }
+      if (!hasTimestamp()) {
         memoizedIsInitialized = 0;
         return false;
       }
@@ -6314,7 +6454,10 @@ public final class ReliableDelivery {
         output.writeBool(3, ack_);
       }
       if (((bitField0_ & 0x00000008) != 0)) {
-        output.writeMessage(4, getMessage());
+        output.writeInt64(4, timestamp_);
+      }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        output.writeMessage(5, getMessage());
       }
       unknownFields.writeTo(output);
     }
@@ -6338,7 +6481,11 @@ public final class ReliableDelivery {
       }
       if (((bitField0_ & 0x00000008) != 0)) {
         size += akka.protobufv3.internal.CodedOutputStream
-          .computeMessageSize(4, getMessage());
+          .computeInt64Size(4, timestamp_);
+      }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        size += akka.protobufv3.internal.CodedOutputStream
+          .computeMessageSize(5, getMessage());
       }
       size += unknownFields.getSerializedSize();
       memoizedSize = size;
@@ -6370,6 +6517,11 @@ public final class ReliableDelivery {
         if (getAck()
             != other.getAck()) return false;
       }
+      if (hasTimestamp() != other.hasTimestamp()) return false;
+      if (hasTimestamp()) {
+        if (getTimestamp()
+            != other.getTimestamp()) return false;
+      }
       if (hasMessage() != other.hasMessage()) return false;
       if (hasMessage()) {
         if (!getMessage()
@@ -6399,6 +6551,11 @@ public final class ReliableDelivery {
         hash = (37 * hash) + ACK_FIELD_NUMBER;
         hash = (53 * hash) + akka.protobufv3.internal.Internal.hashBoolean(
             getAck());
+      }
+      if (hasTimestamp()) {
+        hash = (37 * hash) + TIMESTAMP_FIELD_NUMBER;
+        hash = (53 * hash) + akka.protobufv3.internal.Internal.hashLong(
+            getTimestamp());
       }
       if (hasMessage()) {
         hash = (37 * hash) + MESSAGE_FIELD_NUMBER;
@@ -6548,12 +6705,14 @@ public final class ReliableDelivery {
         bitField0_ = (bitField0_ & ~0x00000002);
         ack_ = false;
         bitField0_ = (bitField0_ & ~0x00000004);
+        timestamp_ = 0L;
+        bitField0_ = (bitField0_ & ~0x00000008);
         if (messageBuilder_ == null) {
           message_ = null;
         } else {
           messageBuilder_.clear();
         }
-        bitField0_ = (bitField0_ & ~0x00000008);
+        bitField0_ = (bitField0_ & ~0x00000010);
         return this;
       }
 
@@ -6595,12 +6754,16 @@ public final class ReliableDelivery {
           to_bitField0_ |= 0x00000004;
         }
         if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.timestamp_ = timestamp_;
+          to_bitField0_ |= 0x00000008;
+        }
+        if (((from_bitField0_ & 0x00000010) != 0)) {
           if (messageBuilder_ == null) {
             result.message_ = message_;
           } else {
             result.message_ = messageBuilder_.build();
           }
-          to_bitField0_ |= 0x00000008;
+          to_bitField0_ |= 0x00000010;
         }
         result.bitField0_ = to_bitField0_;
         onBuilt();
@@ -6662,6 +6825,9 @@ public final class ReliableDelivery {
         if (other.hasAck()) {
           setAck(other.getAck());
         }
+        if (other.hasTimestamp()) {
+          setTimestamp(other.getTimestamp());
+        }
         if (other.hasMessage()) {
           mergeMessage(other.getMessage());
         }
@@ -6679,6 +6845,9 @@ public final class ReliableDelivery {
           return false;
         }
         if (!hasAck()) {
+          return false;
+        }
+        if (!hasTimestamp()) {
           return false;
         }
         if (!hasMessage()) {
@@ -6868,18 +7037,55 @@ public final class ReliableDelivery {
         return this;
       }
 
+      private long timestamp_ ;
+      /**
+       * <code>required int64 timestamp = 4;</code>
+       * @return Whether the timestamp field is set.
+       */
+      public boolean hasTimestamp() {
+        return ((bitField0_ & 0x00000008) != 0);
+      }
+      /**
+       * <code>required int64 timestamp = 4;</code>
+       * @return The timestamp.
+       */
+      public long getTimestamp() {
+        return timestamp_;
+      }
+      /**
+       * <code>required int64 timestamp = 4;</code>
+       * @param value The timestamp to set.
+       * @return This builder for chaining.
+       */
+      public Builder setTimestamp(long value) {
+        bitField0_ |= 0x00000008;
+        timestamp_ = value;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>required int64 timestamp = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearTimestamp() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        timestamp_ = 0L;
+        onChanged();
+        return this;
+      }
+
       private akka.remote.ContainerFormats.Payload message_;
       private akka.protobufv3.internal.SingleFieldBuilderV3<
           akka.remote.ContainerFormats.Payload, akka.remote.ContainerFormats.Payload.Builder, akka.remote.ContainerFormats.PayloadOrBuilder> messageBuilder_;
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        * @return Whether the message field is set.
        */
       public boolean hasMessage() {
-        return ((bitField0_ & 0x00000008) != 0);
+        return ((bitField0_ & 0x00000010) != 0);
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        * @return The message.
        */
       public akka.remote.ContainerFormats.Payload getMessage() {
@@ -6890,7 +7096,7 @@ public final class ReliableDelivery {
         }
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public Builder setMessage(akka.remote.ContainerFormats.Payload value) {
         if (messageBuilder_ == null) {
@@ -6902,11 +7108,11 @@ public final class ReliableDelivery {
         } else {
           messageBuilder_.setMessage(value);
         }
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         return this;
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public Builder setMessage(
           akka.remote.ContainerFormats.Payload.Builder builderForValue) {
@@ -6916,15 +7122,15 @@ public final class ReliableDelivery {
         } else {
           messageBuilder_.setMessage(builderForValue.build());
         }
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         return this;
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public Builder mergeMessage(akka.remote.ContainerFormats.Payload value) {
         if (messageBuilder_ == null) {
-          if (((bitField0_ & 0x00000008) != 0) &&
+          if (((bitField0_ & 0x00000010) != 0) &&
               message_ != null &&
               message_ != akka.remote.ContainerFormats.Payload.getDefaultInstance()) {
             message_ =
@@ -6936,11 +7142,11 @@ public final class ReliableDelivery {
         } else {
           messageBuilder_.mergeFrom(value);
         }
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         return this;
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public Builder clearMessage() {
         if (messageBuilder_ == null) {
@@ -6949,19 +7155,19 @@ public final class ReliableDelivery {
         } else {
           messageBuilder_.clear();
         }
-        bitField0_ = (bitField0_ & ~0x00000008);
+        bitField0_ = (bitField0_ & ~0x00000010);
         return this;
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public akka.remote.ContainerFormats.Payload.Builder getMessageBuilder() {
-        bitField0_ |= 0x00000008;
+        bitField0_ |= 0x00000010;
         onChanged();
         return getMessageFieldBuilder().getBuilder();
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       public akka.remote.ContainerFormats.PayloadOrBuilder getMessageOrBuilder() {
         if (messageBuilder_ != null) {
@@ -6972,7 +7178,7 @@ public final class ReliableDelivery {
         }
       }
       /**
-       * <code>required .Payload message = 4;</code>
+       * <code>required .Payload message = 5;</code>
        */
       private akka.protobufv3.internal.SingleFieldBuilderV3<
           akka.remote.ContainerFormats.Payload, akka.remote.ContainerFormats.Payload.Builder, akka.remote.ContainerFormats.PayloadOrBuilder> 
@@ -7040,6 +7246,651 @@ public final class ReliableDelivery {
 
   }
 
+  public interface CleanupOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:akka.cluster.typed.delivery.Cleanup)
+      akka.protobufv3.internal.MessageOrBuilder {
+
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @return A list containing the qualifiers.
+     */
+    java.util.List<java.lang.String>
+        getQualifiersList();
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @return The count of qualifiers.
+     */
+    int getQualifiersCount();
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @param index The index of the element to return.
+     * @return The qualifiers at the given index.
+     */
+    java.lang.String getQualifiers(int index);
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the qualifiers at the given index.
+     */
+    akka.protobufv3.internal.ByteString
+        getQualifiersBytes(int index);
+  }
+  /**
+   * <pre>
+   * DurableProducerQueue
+   * </pre>
+   *
+   * Protobuf type {@code akka.cluster.typed.delivery.Cleanup}
+   */
+  public  static final class Cleanup extends
+      akka.protobufv3.internal.GeneratedMessageV3 implements
+      // @@protoc_insertion_point(message_implements:akka.cluster.typed.delivery.Cleanup)
+      CleanupOrBuilder {
+  private static final long serialVersionUID = 0L;
+    // Use Cleanup.newBuilder() to construct.
+    private Cleanup(akka.protobufv3.internal.GeneratedMessageV3.Builder<?> builder) {
+      super(builder);
+    }
+    private Cleanup() {
+      qualifiers_ = akka.protobufv3.internal.LazyStringArrayList.EMPTY;
+    }
+
+    @java.lang.Override
+    @SuppressWarnings({"unused"})
+    protected java.lang.Object newInstance(
+        akka.protobufv3.internal.GeneratedMessageV3.UnusedPrivateParameter unused) {
+      return new Cleanup();
+    }
+
+    @java.lang.Override
+    public final akka.protobufv3.internal.UnknownFieldSet
+    getUnknownFields() {
+      return this.unknownFields;
+    }
+    private Cleanup(
+        akka.protobufv3.internal.CodedInputStream input,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      this();
+      if (extensionRegistry == null) {
+        throw new java.lang.NullPointerException();
+      }
+      int mutable_bitField0_ = 0;
+      akka.protobufv3.internal.UnknownFieldSet.Builder unknownFields =
+          akka.protobufv3.internal.UnknownFieldSet.newBuilder();
+      try {
+        boolean done = false;
+        while (!done) {
+          int tag = input.readTag();
+          switch (tag) {
+            case 0:
+              done = true;
+              break;
+            case 10: {
+              akka.protobufv3.internal.ByteString bs = input.readBytes();
+              if (!((mutable_bitField0_ & 0x00000001) != 0)) {
+                qualifiers_ = new akka.protobufv3.internal.LazyStringArrayList();
+                mutable_bitField0_ |= 0x00000001;
+              }
+              qualifiers_.add(bs);
+              break;
+            }
+            default: {
+              if (!parseUnknownField(
+                  input, unknownFields, extensionRegistry, tag)) {
+                done = true;
+              }
+              break;
+            }
+          }
+        }
+      } catch (akka.protobufv3.internal.InvalidProtocolBufferException e) {
+        throw e.setUnfinishedMessage(this);
+      } catch (java.io.IOException e) {
+        throw new akka.protobufv3.internal.InvalidProtocolBufferException(
+            e).setUnfinishedMessage(this);
+      } finally {
+        if (((mutable_bitField0_ & 0x00000001) != 0)) {
+          qualifiers_ = qualifiers_.getUnmodifiableView();
+        }
+        this.unknownFields = unknownFields.build();
+        makeExtensionsImmutable();
+      }
+    }
+    public static final akka.protobufv3.internal.Descriptors.Descriptor
+        getDescriptor() {
+      return akka.cluster.typed.internal.protobuf.ReliableDelivery.internal_static_akka_cluster_typed_delivery_Cleanup_descriptor;
+    }
+
+    @java.lang.Override
+    protected akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return akka.cluster.typed.internal.protobuf.ReliableDelivery.internal_static_akka_cluster_typed_delivery_Cleanup_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.class, akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.Builder.class);
+    }
+
+    public static final int QUALIFIERS_FIELD_NUMBER = 1;
+    private akka.protobufv3.internal.LazyStringList qualifiers_;
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @return A list containing the qualifiers.
+     */
+    public akka.protobufv3.internal.ProtocolStringList
+        getQualifiersList() {
+      return qualifiers_;
+    }
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @return The count of qualifiers.
+     */
+    public int getQualifiersCount() {
+      return qualifiers_.size();
+    }
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @param index The index of the element to return.
+     * @return The qualifiers at the given index.
+     */
+    public java.lang.String getQualifiers(int index) {
+      return qualifiers_.get(index);
+    }
+    /**
+     * <code>repeated string qualifiers = 1;</code>
+     * @param index The index of the value to return.
+     * @return The bytes of the qualifiers at the given index.
+     */
+    public akka.protobufv3.internal.ByteString
+        getQualifiersBytes(int index) {
+      return qualifiers_.getByteString(index);
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(akka.protobufv3.internal.CodedOutputStream output)
+                        throws java.io.IOException {
+      for (int i = 0; i < qualifiers_.size(); i++) {
+        akka.protobufv3.internal.GeneratedMessageV3.writeString(output, 1, qualifiers_.getRaw(i));
+      }
+      unknownFields.writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      {
+        int dataSize = 0;
+        for (int i = 0; i < qualifiers_.size(); i++) {
+          dataSize += computeStringSizeNoTag(qualifiers_.getRaw(i));
+        }
+        size += dataSize;
+        size += 1 * getQualifiersList().size();
+      }
+      size += unknownFields.getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup)) {
+        return super.equals(obj);
+      }
+      akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup other = (akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup) obj;
+
+      if (!getQualifiersList()
+          .equals(other.getQualifiersList())) return false;
+      if (!unknownFields.equals(other.unknownFields)) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      if (getQualifiersCount() > 0) {
+        hash = (37 * hash) + QUALIFIERS_FIELD_NUMBER;
+        hash = (53 * hash) + getQualifiersList().hashCode();
+      }
+      hash = (29 * hash) + unknownFields.hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        java.nio.ByteBuffer data)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        java.nio.ByteBuffer data,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        akka.protobufv3.internal.ByteString data)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        akka.protobufv3.internal.ByteString data,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(byte[] data)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        byte[] data,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws akka.protobufv3.internal.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        java.io.InputStream input,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseDelimitedFrom(
+        java.io.InputStream input,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        akka.protobufv3.internal.CodedInputStream input)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseWithIOException(PARSER, input);
+    }
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parseFrom(
+        akka.protobufv3.internal.CodedInputStream input,
+        akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return akka.protobufv3.internal.GeneratedMessageV3
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        akka.protobufv3.internal.GeneratedMessageV3.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * <pre>
+     * DurableProducerQueue
+     * </pre>
+     *
+     * Protobuf type {@code akka.cluster.typed.delivery.Cleanup}
+     */
+    public static final class Builder extends
+        akka.protobufv3.internal.GeneratedMessageV3.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:akka.cluster.typed.delivery.Cleanup)
+        akka.cluster.typed.internal.protobuf.ReliableDelivery.CleanupOrBuilder {
+      public static final akka.protobufv3.internal.Descriptors.Descriptor
+          getDescriptor() {
+        return akka.cluster.typed.internal.protobuf.ReliableDelivery.internal_static_akka_cluster_typed_delivery_Cleanup_descriptor;
+      }
+
+      @java.lang.Override
+      protected akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return akka.cluster.typed.internal.protobuf.ReliableDelivery.internal_static_akka_cluster_typed_delivery_Cleanup_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.class, akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.Builder.class);
+      }
+
+      // Construct using akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.newBuilder()
+      private Builder() {
+        maybeForceBuilderInitialization();
+      }
+
+      private Builder(
+          akka.protobufv3.internal.GeneratedMessageV3.BuilderParent parent) {
+        super(parent);
+        maybeForceBuilderInitialization();
+      }
+      private void maybeForceBuilderInitialization() {
+        if (akka.protobufv3.internal.GeneratedMessageV3
+                .alwaysUseFieldBuilders) {
+        }
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        qualifiers_ = akka.protobufv3.internal.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000001);
+        return this;
+      }
+
+      @java.lang.Override
+      public akka.protobufv3.internal.Descriptors.Descriptor
+          getDescriptorForType() {
+        return akka.cluster.typed.internal.protobuf.ReliableDelivery.internal_static_akka_cluster_typed_delivery_Cleanup_descriptor;
+      }
+
+      @java.lang.Override
+      public akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup getDefaultInstanceForType() {
+        return akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup build() {
+        akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup buildPartial() {
+        akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup result = new akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup(this);
+        int from_bitField0_ = bitField0_;
+        if (((bitField0_ & 0x00000001) != 0)) {
+          qualifiers_ = qualifiers_.getUnmodifiableView();
+          bitField0_ = (bitField0_ & ~0x00000001);
+        }
+        result.qualifiers_ = qualifiers_;
+        onBuilt();
+        return result;
+      }
+
+      @java.lang.Override
+      public Builder clone() {
+        return super.clone();
+      }
+      @java.lang.Override
+      public Builder setField(
+          akka.protobufv3.internal.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.setField(field, value);
+      }
+      @java.lang.Override
+      public Builder clearField(
+          akka.protobufv3.internal.Descriptors.FieldDescriptor field) {
+        return super.clearField(field);
+      }
+      @java.lang.Override
+      public Builder clearOneof(
+          akka.protobufv3.internal.Descriptors.OneofDescriptor oneof) {
+        return super.clearOneof(oneof);
+      }
+      @java.lang.Override
+      public Builder setRepeatedField(
+          akka.protobufv3.internal.Descriptors.FieldDescriptor field,
+          int index, java.lang.Object value) {
+        return super.setRepeatedField(field, index, value);
+      }
+      @java.lang.Override
+      public Builder addRepeatedField(
+          akka.protobufv3.internal.Descriptors.FieldDescriptor field,
+          java.lang.Object value) {
+        return super.addRepeatedField(field, value);
+      }
+      @java.lang.Override
+      public Builder mergeFrom(akka.protobufv3.internal.Message other) {
+        if (other instanceof akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup) {
+          return mergeFrom((akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup other) {
+        if (other == akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup.getDefaultInstance()) return this;
+        if (!other.qualifiers_.isEmpty()) {
+          if (qualifiers_.isEmpty()) {
+            qualifiers_ = other.qualifiers_;
+            bitField0_ = (bitField0_ & ~0x00000001);
+          } else {
+            ensureQualifiersIsMutable();
+            qualifiers_.addAll(other.qualifiers_);
+          }
+          onChanged();
+        }
+        this.mergeUnknownFields(other.unknownFields);
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          akka.protobufv3.internal.CodedInputStream input,
+          akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup parsedMessage = null;
+        try {
+          parsedMessage = PARSER.parsePartialFrom(input, extensionRegistry);
+        } catch (akka.protobufv3.internal.InvalidProtocolBufferException e) {
+          parsedMessage = (akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup) e.getUnfinishedMessage();
+          throw e.unwrapIOException();
+        } finally {
+          if (parsedMessage != null) {
+            mergeFrom(parsedMessage);
+          }
+        }
+        return this;
+      }
+      private int bitField0_;
+
+      private akka.protobufv3.internal.LazyStringList qualifiers_ = akka.protobufv3.internal.LazyStringArrayList.EMPTY;
+      private void ensureQualifiersIsMutable() {
+        if (!((bitField0_ & 0x00000001) != 0)) {
+          qualifiers_ = new akka.protobufv3.internal.LazyStringArrayList(qualifiers_);
+          bitField0_ |= 0x00000001;
+         }
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @return A list containing the qualifiers.
+       */
+      public akka.protobufv3.internal.ProtocolStringList
+          getQualifiersList() {
+        return qualifiers_.getUnmodifiableView();
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @return The count of qualifiers.
+       */
+      public int getQualifiersCount() {
+        return qualifiers_.size();
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param index The index of the element to return.
+       * @return The qualifiers at the given index.
+       */
+      public java.lang.String getQualifiers(int index) {
+        return qualifiers_.get(index);
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param index The index of the value to return.
+       * @return The bytes of the qualifiers at the given index.
+       */
+      public akka.protobufv3.internal.ByteString
+          getQualifiersBytes(int index) {
+        return qualifiers_.getByteString(index);
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param index The index to set the value at.
+       * @param value The qualifiers to set.
+       * @return This builder for chaining.
+       */
+      public Builder setQualifiers(
+          int index, java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  ensureQualifiersIsMutable();
+        qualifiers_.set(index, value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param value The qualifiers to add.
+       * @return This builder for chaining.
+       */
+      public Builder addQualifiers(
+          java.lang.String value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  ensureQualifiersIsMutable();
+        qualifiers_.add(value);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param values The qualifiers to add.
+       * @return This builder for chaining.
+       */
+      public Builder addAllQualifiers(
+          java.lang.Iterable<java.lang.String> values) {
+        ensureQualifiersIsMutable();
+        akka.protobufv3.internal.AbstractMessageLite.Builder.addAll(
+            values, qualifiers_);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearQualifiers() {
+        qualifiers_ = akka.protobufv3.internal.LazyStringArrayList.EMPTY;
+        bitField0_ = (bitField0_ & ~0x00000001);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>repeated string qualifiers = 1;</code>
+       * @param value The bytes of the qualifiers to add.
+       * @return This builder for chaining.
+       */
+      public Builder addQualifiersBytes(
+          akka.protobufv3.internal.ByteString value) {
+        if (value == null) {
+    throw new NullPointerException();
+  }
+  ensureQualifiersIsMutable();
+        qualifiers_.add(value);
+        onChanged();
+        return this;
+      }
+      @java.lang.Override
+      public final Builder setUnknownFields(
+          final akka.protobufv3.internal.UnknownFieldSet unknownFields) {
+        return super.setUnknownFields(unknownFields);
+      }
+
+      @java.lang.Override
+      public final Builder mergeUnknownFields(
+          final akka.protobufv3.internal.UnknownFieldSet unknownFields) {
+        return super.mergeUnknownFields(unknownFields);
+      }
+
+
+      // @@protoc_insertion_point(builder_scope:akka.cluster.typed.delivery.Cleanup)
+    }
+
+    // @@protoc_insertion_point(class_scope:akka.cluster.typed.delivery.Cleanup)
+    private static final akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup();
+    }
+
+    public static akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    @java.lang.Deprecated public static final akka.protobufv3.internal.Parser<Cleanup>
+        PARSER = new akka.protobufv3.internal.AbstractParser<Cleanup>() {
+      @java.lang.Override
+      public Cleanup parsePartialFrom(
+          akka.protobufv3.internal.CodedInputStream input,
+          akka.protobufv3.internal.ExtensionRegistryLite extensionRegistry)
+          throws akka.protobufv3.internal.InvalidProtocolBufferException {
+        return new Cleanup(input, extensionRegistry);
+      }
+    };
+
+    public static akka.protobufv3.internal.Parser<Cleanup> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public akka.protobufv3.internal.Parser<Cleanup> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public akka.cluster.typed.internal.protobuf.ReliableDelivery.Cleanup getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
   private static final akka.protobufv3.internal.Descriptors.Descriptor
     internal_static_akka_cluster_typed_delivery_SequencedMessage_descriptor;
   private static final 
@@ -7080,6 +7931,11 @@ public final class ReliableDelivery {
   private static final 
     akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable
       internal_static_akka_cluster_typed_delivery_MessageSent_fieldAccessorTable;
+  private static final akka.protobufv3.internal.Descriptors.Descriptor
+    internal_static_akka_cluster_typed_delivery_Cleanup_descriptor;
+  private static final 
+    akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable
+      internal_static_akka_cluster_typed_delivery_Cleanup_fieldAccessorTable;
 
   public static akka.protobufv3.internal.Descriptors.FileDescriptor
       getDescriptor() {
@@ -7104,11 +7960,13 @@ public final class ReliableDelivery {
       "firmedSeqNr\030\002 \002(\003\0229\n\tconfirmed\030\003 \003(\0132&.a" +
       "kka.cluster.typed.delivery.Confirmed\022=\n\013" +
       "unconfirmed\030\004 \003(\0132(.akka.cluster.typed.d" +
-      "elivery.MessageSent\"-\n\tConfirmed\022\r\n\005seqN" +
-      "r\030\001 \002(\003\022\021\n\tqualifier\030\002 \002(\t\"W\n\013MessageSen" +
-      "t\022\r\n\005seqNr\030\001 \002(\003\022\021\n\tqualifier\030\002 \002(\t\022\013\n\003a" +
-      "ck\030\003 \002(\010\022\031\n\007message\030\004 \002(\0132\010.PayloadB(\n$a" +
-      "kka.cluster.typed.internal.protobufH\001"
+      "elivery.MessageSent\"@\n\tConfirmed\022\r\n\005seqN" +
+      "r\030\001 \002(\003\022\021\n\tqualifier\030\002 \002(\t\022\021\n\ttimestamp\030" +
+      "\003 \002(\003\"j\n\013MessageSent\022\r\n\005seqNr\030\001 \002(\003\022\021\n\tq" +
+      "ualifier\030\002 \002(\t\022\013\n\003ack\030\003 \002(\010\022\021\n\ttimestamp" +
+      "\030\004 \002(\003\022\031\n\007message\030\005 \002(\0132\010.Payload\"\035\n\007Cle" +
+      "anup\022\022\n\nqualifiers\030\001 \003(\tB(\n$akka.cluster" +
+      ".typed.internal.protobufH\001"
     };
     descriptor = akka.protobufv3.internal.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -7156,13 +8014,19 @@ public final class ReliableDelivery {
     internal_static_akka_cluster_typed_delivery_Confirmed_fieldAccessorTable = new
       akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable(
         internal_static_akka_cluster_typed_delivery_Confirmed_descriptor,
-        new java.lang.String[] { "SeqNr", "Qualifier", });
+        new java.lang.String[] { "SeqNr", "Qualifier", "Timestamp", });
     internal_static_akka_cluster_typed_delivery_MessageSent_descriptor =
       getDescriptor().getMessageTypes().get(7);
     internal_static_akka_cluster_typed_delivery_MessageSent_fieldAccessorTable = new
       akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable(
         internal_static_akka_cluster_typed_delivery_MessageSent_descriptor,
-        new java.lang.String[] { "SeqNr", "Qualifier", "Ack", "Message", });
+        new java.lang.String[] { "SeqNr", "Qualifier", "Ack", "Timestamp", "Message", });
+    internal_static_akka_cluster_typed_delivery_Cleanup_descriptor =
+      getDescriptor().getMessageTypes().get(8);
+    internal_static_akka_cluster_typed_delivery_Cleanup_fieldAccessorTable = new
+      akka.protobufv3.internal.GeneratedMessageV3.FieldAccessorTable(
+        internal_static_akka_cluster_typed_delivery_Cleanup_descriptor,
+        new java.lang.String[] { "Qualifiers", });
     akka.remote.ContainerFormats.getDescriptor();
   }
 

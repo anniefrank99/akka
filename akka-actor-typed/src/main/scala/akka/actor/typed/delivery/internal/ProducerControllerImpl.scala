@@ -465,7 +465,7 @@ private class ProducerControllerImpl[A: ClassTag](
         // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
         // TODO to reduce number of writes, consider to only StoreMessageConfirmed for the Request messages and not for each Ack
         if (newMaxConfirmedSeqNr != s.confirmedSeqNr)
-          d ! StoreMessageConfirmed(newMaxConfirmedSeqNr, NoQualifier)
+          d ! StoreMessageConfirmed(newMaxConfirmedSeqNr, NoQualifier, System.currentTimeMillis())
       }
 
       s.copy(confirmedSeqNr = newMaxConfirmedSeqNr, replyAfterStore = newReplyAfterStore, unconfirmed = newUnconfirmed)
@@ -551,7 +551,9 @@ private class ProducerControllerImpl[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMsg(m, newReplyAfterStore, ack = true)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = true, NoQualifier), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, m, ack = true, NoQualifier, System.currentTimeMillis()),
+            attempt = 1)
           active(s.copy(replyAfterStore = newReplyAfterStore))
         }
 
@@ -559,11 +561,13 @@ private class ProducerControllerImpl[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMsg(m, s.replyAfterStore, ack = false)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, m, ack = false, NoQualifier), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, m, ack = false, NoQualifier, System.currentTimeMillis()),
+            attempt = 1)
           Behaviors.same
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack, NoQualifier)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, ack, NoQualifier, _)) =>
         receiveStoreMessageSentCompleted(seqNr, m, ack)
 
       case f: StoreMessageSentFailed[A] =>

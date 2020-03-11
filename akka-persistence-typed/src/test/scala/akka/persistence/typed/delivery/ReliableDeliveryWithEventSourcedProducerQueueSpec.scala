@@ -121,8 +121,6 @@ class ReliableDeliveryWithEventSourcedProducerQueueSpec
       system.log.info("Stopping [{}]", producerController)
       testKit.stop(producerController)
 
-      // TODO how should consumer notice that producerController has stopped?
-      // Maybe it should just watch it, since it is anyway responsible for RegisterToProducerController
       consumerProbe.expectTerminated(producerController)
 
       val producerController2 = spawn(

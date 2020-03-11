@@ -20,6 +20,7 @@ import org.scalatest.wordspec.AnyWordSpecLike
 
 class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import DurableProducerQueue.NoQualifier
+  import TestDurableProducerQueue.TestTimestamp
 
   private var idCount = 0
   private def nextId(): Int = {
@@ -64,10 +65,10 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
         DurableProducerQueue.State(
           currentSeqNr = 5,
           highestConfirmedSeqNr = 2,
-          confirmedSeqNr = Map(NoQualifier -> 2),
+          confirmedSeqNr = Map(NoQualifier -> (2L -> TestTimestamp)),
           unconfirmed = Vector(
-            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, NoQualifier),
-            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, NoQualifier))))
+            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, NoQualifier, TestTimestamp),
+            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, NoQualifier, TestTimestamp))))
 
       val workPullingController =
         spawn(
@@ -166,8 +167,11 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),
-          DurableProducerQueue
-            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
+          DurableProducerQueue.State(
+            2,
+            0,
+            Map.empty,
+            Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier, TestTimestamp))))
       }
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.message should ===(TestConsumer.Job("msg-1"))
@@ -197,10 +201,10 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             1,
             Map.empty,
             Vector(
-              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
-              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       // start another worker
@@ -217,11 +221,11 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             1,
             Map.empty,
             Vector(
-              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
-              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier),
-              MessageSent(6, TestConsumer.Job("msg-6"), ack = false, NoQualifier))))
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(6, TestConsumer.Job("msg-6"), ack = false, NoQualifier, TestTimestamp))))
       }
       val seqMsg6 = workerController2Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg6.message should ===(TestConsumer.Job("msg-6"))
@@ -235,10 +239,10 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             6,
             Map.empty,
             Vector(
-              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
-              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       seqMsg1.producerController ! ProducerControllerImpl.Ack(3)
@@ -250,8 +254,8 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             6,
             Map.empty,
             Vector(
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       workerController1Probe.stop()
@@ -285,8 +289,11 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
       producerProbe.awaitAssert {
         assertState(
           stateHolder.get(),
-          DurableProducerQueue
-            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
+          DurableProducerQueue.State(
+            2,
+            0,
+            Map.empty,
+            Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier, TestTimestamp))))
       }
       val seqMsg1 = workerController1Probe.expectMessageType[ConsumerController.SequencedMessage[TestConsumer.Job]]
       seqMsg1.message should ===(TestConsumer.Job("msg-1"))
@@ -310,10 +317,10 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             1,
             Map.empty,
             Vector(
-              MessageSent(2, TestConsumer.Job("msg-2"), ack = false, NoQualifier),
-              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = false, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       // start another worker
@@ -334,10 +341,10 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             6,
             Map.empty,
             Vector(
-              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier),
-              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier),
-              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier),
-              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(2, TestConsumer.Job("msg-2"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(3, TestConsumer.Job("msg-3"), ack = false, NoQualifier, TestTimestamp),
+              MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp),
+              MessageSent(5, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       workerController1Probe.stop()
@@ -369,7 +376,7 @@ class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
             Map.empty,
             Vector(
               // note that it has a different seqNr than before
-              MessageSent(10, TestConsumer.Job("msg-5"), ack = false, NoQualifier))))
+              MessageSent(10, TestConsumer.Job("msg-5"), ack = false, NoQualifier, TestTimestamp))))
       }
 
       workerController1Probe.stop()

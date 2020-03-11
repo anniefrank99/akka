@@ -23,12 +23,14 @@ import akka.actor.typed.delivery.internal.DeliverySerializable
 object DurableProducerQueue {
 
   type SeqNr = Long
+  // Timestamp in millis since epoch, System.currentTimeMillis
+  type TimestampMillis = Long
 
   type ConfirmationQualifier = String
 
   val NoQualifier: ConfirmationQualifier = ""
 
-  sealed trait Command[A]
+  trait Command[A]
 
   /**
    * Request that is used at startup to retrieve the unconfirmed messages and current sequence number.
@@ -52,7 +54,10 @@ object DurableProducerQueue {
    * This command may be retied and the implementation should be idempotent, i.e. deduplicate
    * already processed sequence numbers.
    */
-  final case class StoreMessageConfirmed[A](seqNr: SeqNr, confirmationQualifier: ConfirmationQualifier)
+  final case class StoreMessageConfirmed[A](
+      seqNr: SeqNr,
+      confirmationQualifier: ConfirmationQualifier,
+      timestampMillis: TimestampMillis)
       extends Command[A]
 
   object State {
@@ -61,7 +66,7 @@ object DurableProducerQueue {
   final case class State[A](
       currentSeqNr: SeqNr,
       highestConfirmedSeqNr: SeqNr,
-      confirmedSeqNr: Map[ConfirmationQualifier, SeqNr],
+      confirmedSeqNr: Map[ConfirmationQualifier, (SeqNr, TimestampMillis)],
       unconfirmed: immutable.IndexedSeq[MessageSent[A]])
       extends DeliverySerializable
 
@@ -73,13 +78,26 @@ object DurableProducerQueue {
   /**
    * The fact (event) that a message has been sent.
    */
-  final case class MessageSent[A](seqNr: SeqNr, message: A, ack: Boolean, confirmationQualifier: ConfirmationQualifier)
+  final case class MessageSent[A](
+      seqNr: SeqNr,
+      message: A,
+      ack: Boolean,
+      confirmationQualifier: ConfirmationQualifier,
+      timestampMillis: TimestampMillis)
       extends Event
 
   /**
    * INTERNAL API: The fact (event) that a message has been confirmed to be delivered and processed.
    */
-  @InternalApi private[akka] final case class Confirmed[A](seqNr: SeqNr, confirmationQualifier: ConfirmationQualifier)
+  @InternalApi private[akka] final case class Confirmed(
+      seqNr: SeqNr,
+      confirmationQualifier: ConfirmationQualifier,
+      timestampMillis: TimestampMillis)
       extends Event
+
+  /**
+   * INTERNAL API: Remove entries related to the confirmationQualifiers that haven't been used for a while.
+   */
+  @InternalApi private[akka] final case class Cleanup(confirmationQualifiers: Set[String]) extends Event
 
 }

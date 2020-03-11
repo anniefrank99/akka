@@ -365,7 +365,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
         durableQueue.foreach { d =>
           // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.entityId)
+          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.entityId, System.currentTimeMillis())
         }
       }
 
@@ -511,7 +511,9 @@ private class ShardingProducerControllerImpl[A: ClassTag](
           // loaded from durable queue, currentSeqNr has already b
           onMessage(msg.envelope.entityId, msg.envelope.message, None, msg.alreadyStored, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, msg.envelope.message, false, msg.envelope.entityId), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, msg.envelope.message, false, msg.envelope.entityId, System.currentTimeMillis()),
+            attempt = 1)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1))
         }
 
@@ -519,12 +521,14 @@ private class ShardingProducerControllerImpl[A: ClassTag](
         if (durableQueue.isEmpty) {
           onMessage(entityId, message, Some(replyTo), s.currentSeqNr, s.replyAfterStore)
         } else {
-          storeMessageSent(MessageSent(s.currentSeqNr, message, ack = true, entityId), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, message, ack = true, entityId, System.currentTimeMillis()),
+            attempt = 1)
           val newReplyAfterStore = s.replyAfterStore.updated(s.currentSeqNr, replyTo)
           active(s.copy(currentSeqNr = s.currentSeqNr + 1, replyAfterStore = newReplyAfterStore))
         }
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, msg: A, _, entityId)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, msg: A, _, entityId, _)) =>
         receiveStoreMessageSentCompleted(seqNr, msg, entityId)
 
       case f: StoreMessageSentFailed[A] =>
@@ -568,7 +572,7 @@ private class ShardingProducerControllerImpl[A: ClassTag](
 
   private def send(msg: A, outKey: OutKey, outSeqNr: OutSeqNr, nextTo: ProducerController.RequestNext[A]): Unit = {
     if (context.log.isTraceEnabled)
-      context.log.trace("Sending [{}] with outSeqNr [{}].", msg.getClass.getName, outSeqNr)
+      context.log.traceN("Sending [{}] to [{}] with outSeqNr [{}].", msg.getClass.getName, outKey, outSeqNr)
     implicit val askTimeout: Timeout = entityAskTimeout
     context.ask[ProducerController.MessageWithConfirmation[A], OutSeqNr](
       nextTo.askNextTo,

@@ -24,6 +24,7 @@ class ReliableDeliverySerializerSpec extends ScalaTestWithActorTestKit with AnyW
 
   "ReliableDeliverySerializer" must {
 
+    val timestamp = System.currentTimeMillis()
     Seq(
       "SequencedMessage-1" -> ConsumerController.SequencedMessage("prod-1", 17L, "msg17", false, false)(ref),
       "SequencedMessage-2" -> ConsumerController.SequencedMessage("prod-1", 1L, "msg01", true, true)(ref),
@@ -31,22 +32,27 @@ class ReliableDeliverySerializerSpec extends ScalaTestWithActorTestKit with AnyW
       "Request" -> ProducerControllerImpl.Request(5L, 25L, true, true),
       "Resend" -> ProducerControllerImpl.Resend(5L),
       "RegisterConsumer" -> ProducerController.RegisterConsumer(ref),
-      "DurableProducerQueue.MessageSent-1" -> DurableProducerQueue.MessageSent(3L, "msg03", false, ""),
-      "DurableProducerQueue.MessageSent-2" -> DurableProducerQueue.MessageSent(3L, "msg03", true, "q1"),
-      "DurableProducerQueue.Confirmed" -> DurableProducerQueue.Confirmed(3L, "q2"),
+      "DurableProducerQueue.MessageSent-1" -> DurableProducerQueue.MessageSent(3L, "msg03", false, "", timestamp),
+      "DurableProducerQueue.MessageSent-2" -> DurableProducerQueue.MessageSent(3L, "msg03", true, "q1", timestamp),
+      "DurableProducerQueue.Confirmed" -> DurableProducerQueue.Confirmed(3L, "q2", timestamp),
       "DurableProducerQueue.State-1" -> DurableProducerQueue.State(3L, 2L, Map.empty, Vector.empty),
       "DurableProducerQueue.State-2" -> DurableProducerQueue.State(
         3L,
         2L,
-        Map("" -> 2L),
-        Vector(DurableProducerQueue.MessageSent(3L, "msg03", false, ""))),
+        Map("" -> (2L -> timestamp)),
+        Vector(DurableProducerQueue.MessageSent(3L, "msg03", false, "", timestamp))),
       "DurableProducerQueue.State-3" -> DurableProducerQueue.State(
         17L,
         12L,
-        Map("q1" -> 5L, "q2" -> 7L, "q3" -> 12L, "q4" -> 14L),
+        Map(
+          "q1" -> (5L -> timestamp),
+          "q2" -> (7L -> timestamp),
+          "q3" -> (12L -> timestamp),
+          "q4" -> (14L -> timestamp)),
         Vector(
-          DurableProducerQueue.MessageSent(15L, "msg15", true, "q4"),
-          DurableProducerQueue.MessageSent(16L, "msg16", true, "q4")))).foreach {
+          DurableProducerQueue.MessageSent(15L, "msg15", true, "q4", timestamp),
+          DurableProducerQueue.MessageSent(16L, "msg16", true, "q4", timestamp))),
+      "DurableProducerQueue.Cleanup" -> DurableProducerQueue.Cleanup(Set("q1", "q2", "q3"))).foreach {
       case (scenario, item) =>
         s"resolve serializer for $scenario" in {
           val serializer = SerializationExtension(classicSystem)

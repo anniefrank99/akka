@@ -7,7 +7,6 @@ package akka.cluster.typed.internal.delivery
 import java.io.NotSerializableException
 
 import akka.util.ccompat.JavaConverters._
-
 import akka.actor.typed.ActorRefResolver
 import akka.actor.typed.delivery.ConsumerController
 import akka.actor.typed.delivery.DurableProducerQueue
@@ -42,6 +41,7 @@ import akka.serialization.SerializerWithStringManifest
   private val DurableQueueMessageSentManifest = "f"
   private val DurableQueueConfirmedManifest = "g"
   private val DurableQueueStateManifest = "h"
+  private val DurableQueueCleanupManifest = "i"
 
   override def manifest(o: AnyRef): String = o match {
     case _: ConsumerController.SequencedMessage[_] => SequencedMessageManifest
@@ -50,8 +50,9 @@ import akka.serialization.SerializerWithStringManifest
     case _: ProducerControllerImpl.Resend          => ResendManifest
     case _: ProducerController.RegisterConsumer[_] => RegisterConsumerManifest
     case _: DurableProducerQueue.MessageSent[_]    => DurableQueueMessageSentManifest
-    case _: DurableProducerQueue.Confirmed[_]      => DurableQueueConfirmedManifest
+    case _: DurableProducerQueue.Confirmed         => DurableQueueConfirmedManifest
     case _: DurableProducerQueue.State[_]          => DurableQueueStateManifest
+    case _: DurableProducerQueue.Cleanup           => DurableQueueCleanupManifest
     case _ =>
       throw new IllegalArgumentException(s"Can't serialize object of type ${o.getClass} in [${getClass.getName}]")
   }
@@ -63,8 +64,9 @@ import akka.serialization.SerializerWithStringManifest
     case m: ProducerControllerImpl.Resend          => resendToBinary(m)
     case m: ProducerController.RegisterConsumer[_] => registerConsumerToBinary(m)
     case m: DurableProducerQueue.MessageSent[_]    => durableQueueMessageSentToBinary(m)
-    case m: DurableProducerQueue.Confirmed[_]      => durableQueueConfirmedToBinary(m)
+    case m: DurableProducerQueue.Confirmed         => durableQueueConfirmedToBinary(m)
     case m: DurableProducerQueue.State[_]          => durableQueueStateToBinary(m)
+    case m: DurableProducerQueue.Cleanup           => durableQueueCleanupToBinary(m)
     case _ =>
       throw new IllegalArgumentException(s"Cannot serialize object of type [${o.getClass.getName}]")
   }
@@ -116,18 +118,23 @@ import akka.serialization.SerializerWithStringManifest
     b.setSeqNr(m.seqNr)
     b.setQualifier(m.confirmationQualifier)
     b.setAck(m.ack)
+    b.setTimestamp(m.timestampMillis)
     b.setMessage(payloadSupport.payloadBuilder(m.message))
     b.build()
   }
 
-  private def durableQueueConfirmedToBinary(m: DurableProducerQueue.Confirmed[_]): _root_.scala.Array[Byte] = {
-    durableQueueConfirmedToProto(m.confirmationQualifier, m.seqNr).toByteArray()
+  private def durableQueueConfirmedToBinary(m: DurableProducerQueue.Confirmed): _root_.scala.Array[Byte] = {
+    durableQueueConfirmedToProto(m.confirmationQualifier, m.seqNr, m.timestampMillis).toByteArray()
   }
 
-  private def durableQueueConfirmedToProto(qualifier: String, seqNr: DurableProducerQueue.SeqNr): Confirmed = {
+  private def durableQueueConfirmedToProto(
+      qualifier: String,
+      seqNr: DurableProducerQueue.SeqNr,
+      timestampMillis: DurableProducerQueue.TimestampMillis): Confirmed = {
     val b = ReliableDelivery.Confirmed.newBuilder()
     b.setSeqNr(seqNr)
     b.setQualifier(qualifier)
+    b.setTimestamp(timestampMillis)
     b.build()
   }
 
@@ -136,9 +143,15 @@ import akka.serialization.SerializerWithStringManifest
     b.setCurrentSeqNr(m.currentSeqNr)
     b.setHighestConfirmedSeqNr(m.highestConfirmedSeqNr)
     b.addAllConfirmed(m.confirmedSeqNr.map {
-      case (qualifier, seqNr) => durableQueueConfirmedToProto(qualifier, seqNr)
+      case (qualifier, (seqNr, timestamp)) => durableQueueConfirmedToProto(qualifier, seqNr, timestamp)
     }.asJava)
     b.addAllUnconfirmed(m.unconfirmed.map(durableQueueMessageSentToProto).asJava)
+    b.build().toByteArray()
+  }
+
+  private def durableQueueCleanupToBinary(m: DurableProducerQueue.Cleanup): Array[Byte] = {
+    val b = ReliableDelivery.Cleanup.newBuilder()
+    b.addAllQualifiers(m.confirmationQualifiers.asJava)
     b.build().toByteArray()
   }
 
@@ -151,6 +164,7 @@ import akka.serialization.SerializerWithStringManifest
     case DurableQueueMessageSentManifest => durableQueueMessageSentFromBinary(bytes)
     case DurableQueueConfirmedManifest   => durableQueueConfirmedFromBinary(bytes)
     case DurableQueueStateManifest       => durableQueueStateFromBinary(bytes)
+    case DurableQueueCleanupManifest     => durableQueueCleanupFromBinary(bytes)
     case _ =>
       throw new NotSerializableException(
         s"Unimplemented deserialization of message with manifest [$manifest] in [${getClass.getName}]")
@@ -200,12 +214,12 @@ import akka.serialization.SerializerWithStringManifest
   private def durableQueueMessageSentFromProto(
       sent: ReliableDelivery.MessageSent): DurableProducerQueue.MessageSent[Any] = {
     val wrappedMsg = payloadSupport.deserializePayload(sent.getMessage)
-    DurableProducerQueue.MessageSent(sent.getSeqNr, wrappedMsg, sent.getAck, sent.getQualifier)
+    DurableProducerQueue.MessageSent(sent.getSeqNr, wrappedMsg, sent.getAck, sent.getQualifier, sent.getTimestamp)
   }
 
   private def durableQueueConfirmedFromBinary(bytes: Array[Byte]): AnyRef = {
     val confirmed = ReliableDelivery.Confirmed.parseFrom(bytes)
-    DurableProducerQueue.Confirmed(confirmed.getSeqNr, confirmed.getQualifier)
+    DurableProducerQueue.Confirmed(confirmed.getSeqNr, confirmed.getQualifier, confirmed.getTimestamp)
   }
 
   private def durableQueueStateFromBinary(bytes: Array[Byte]): AnyRef = {
@@ -213,8 +227,15 @@ import akka.serialization.SerializerWithStringManifest
     DurableProducerQueue.State(
       state.getCurrentSeqNr,
       state.getHighestConfirmedSeqNr,
-      state.getConfirmedList.asScala.map(confirmed => confirmed.getQualifier -> confirmed.getSeqNr).toMap,
+      state.getConfirmedList.asScala
+        .map(confirmed => confirmed.getQualifier -> (confirmed.getSeqNr -> confirmed.getTimestamp))
+        .toMap,
       state.getUnconfirmedList.asScala.toVector.map(durableQueueMessageSentFromProto))
+  }
+
+  private def durableQueueCleanupFromBinary(bytes: Array[Byte]): AnyRef = {
+    val cleanup = ReliableDelivery.Cleanup.parseFrom(bytes)
+    DurableProducerQueue.Cleanup(cleanup.getQualifiersList.iterator.asScala.toSet)
   }
 
 }

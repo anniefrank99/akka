@@ -131,8 +131,6 @@ object ConsumerController {
       copy(first = true)(producerController)
   }
 
-  // TODO can be useful with a graceful stop message. Replying when all buffered messages have been confirmed. Not requesting more.
-
   object Settings {
 
     /**

@@ -109,14 +109,20 @@ class DurableShardingSpec
       val delivery1 = consumerProbe.receiveMessage()
       delivery1.confirmTo ! ConsumerController.Confirmed
       journalOperations.expectMessageType[InmemJournal.Write].event.getClass should ===(
-        classOf[DurableProducerQueue.Confirmed[_]])
+        classOf[DurableProducerQueue.Confirmed])
 
       val delivery2 = consumerProbe.receiveMessage()
       delivery2.confirmTo ! ConsumerController.Confirmed
       journalOperations.expectMessageType[InmemJournal.Write].event.getClass should ===(
-        classOf[DurableProducerQueue.Confirmed[_]])
+        classOf[DurableProducerQueue.Confirmed])
 
       producerProbe.receiveMessage()
+
+      // let the initial messages reach the ShardingConsumerController before stopping ShardingProducerController
+      val delivery3 = consumerProbe.receiveMessage()
+      delivery3.msg should ===(TestConsumer.Job("msg-3"))
+      delivery3.seqNr should ===(3)
+      Thread.sleep(1000)
 
       system.log.info("Stopping [{}]", shardingProducerController)
       testKit.stop(shardingProducerController)
@@ -131,9 +137,6 @@ class DurableShardingSpec
       shardingProducerController2 ! ShardingProducerController.Start(producerProbe.ref)
 
       // delivery3 and delivery4 are still from old shardingProducerController, that were queued in ConsumerController
-      val delivery3 = consumerProbe.receiveMessage()
-      delivery3.msg should ===(TestConsumer.Job("msg-3"))
-      delivery3.seqNr should ===(3)
       delivery3.confirmTo ! ConsumerController.Confirmed
       // that confirmation goes to old dead shardingProducerController, and therefore not stored
       journalOperations.expectNoMessage()
@@ -150,15 +153,19 @@ class DurableShardingSpec
       redelivery3.msg should ===(TestConsumer.Job("msg-3"))
       redelivery3.seqNr should ===(1) // new ProducerController and there starting at 1
       redelivery3.confirmTo ! ConsumerController.Confirmed
-      journalOperations.expectMessageType[InmemJournal.Write].event should ===(
-        DurableProducerQueue.Confirmed(seqNr = 3, "entity-1"))
+      val confirmed3 =
+        journalOperations.expectMessageType[InmemJournal.Write].event.asInstanceOf[DurableProducerQueue.Confirmed]
+      confirmed3.seqNr should ===(3)
+      confirmed3.confirmationQualifier should ===("entity-1")
 
       val redelivery4 = consumerProbe.receiveMessage()
       redelivery4.msg should ===(TestConsumer.Job("msg-4"))
       redelivery4.seqNr should ===(2)
       redelivery4.confirmTo ! ConsumerController.Confirmed
-      journalOperations.expectMessageType[InmemJournal.Write].event should ===(
-        DurableProducerQueue.Confirmed(seqNr = 4, "entity-1"))
+      val confirmed4 =
+        journalOperations.expectMessageType[InmemJournal.Write].event.asInstanceOf[DurableProducerQueue.Confirmed]
+      confirmed4.seqNr should ===(4)
+      confirmed4.confirmationQualifier should ===("entity-1")
 
       val next5 = producerProbe.receiveMessage()
       next5.sendNextTo ! ShardingEnvelope("entity-1", TestConsumer.Job(s"msg-5"))
@@ -169,8 +176,10 @@ class DurableShardingSpec
       delivery5.msg should ===(TestConsumer.Job("msg-5"))
       delivery5.seqNr should ===(3)
       delivery5.confirmTo ! ConsumerController.Confirmed
-      journalOperations.expectMessageType[InmemJournal.Write].event should ===(
-        DurableProducerQueue.Confirmed(seqNr = 5, "entity-1"))
+      val confirmed5 =
+        journalOperations.expectMessageType[InmemJournal.Write].event.asInstanceOf[DurableProducerQueue.Confirmed]
+      confirmed5.seqNr should ===(5)
+      confirmed5.confirmationQualifier should ===("entity-1")
 
       testKit.stop(shardingProducerController2)
     }

@@ -18,6 +18,7 @@ import org.scalatest.wordspec.AnyWordSpecLike
 class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
   import TestConsumer.sequencedMessage
   import DurableProducerQueue.NoQualifier
+  import TestDurableProducerQueue.TestTimestamp
 
   private var idCount = 0
   private def nextId(): Int = {
@@ -38,10 +39,10 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
         DurableProducerQueue.State(
           currentSeqNr = 5,
           highestConfirmedSeqNr = 2,
-          confirmedSeqNr = Map(NoQualifier -> 2),
+          confirmedSeqNr = Map(NoQualifier -> (2L -> TestTimestamp)),
           unconfirmed = Vector(
-            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, NoQualifier),
-            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, NoQualifier))))
+            DurableProducerQueue.MessageSent(3, TestConsumer.Job("msg-3"), false, NoQualifier, TestTimestamp),
+            DurableProducerQueue.MessageSent(4, TestConsumer.Job("msg-4"), false, NoQualifier, TestTimestamp))))
 
       val producerController =
         spawn(ProducerController[TestConsumer.Job](producerId, Some(durable)), s"producerController-${idCount}")
@@ -89,12 +90,16 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
       consumerControllerProbe.expectMessage(sequencedMessage(producerId, 1, producerController))
       producerProbe.awaitAssert {
         stateHolder.get() should ===(
-          DurableProducerQueue
-            .State(2, 0, Map.empty, Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier))))
+          DurableProducerQueue.State(
+            2,
+            0,
+            Map.empty,
+            Vector(MessageSent(1, TestConsumer.Job("msg-1"), ack = false, NoQualifier, TestTimestamp))))
       }
       producerController ! ProducerControllerImpl.Request(1L, 10L, true, false)
       producerProbe.awaitAssert {
-        stateHolder.get() should ===(DurableProducerQueue.State(2, 1, Map(NoQualifier -> 1), Vector.empty))
+        stateHolder.get() should ===(
+          DurableProducerQueue.State(2, 1, Map(NoQualifier -> (1L -> TestTimestamp)), Vector.empty))
       }
 
       val replyTo = createTestProbe[Long]()
@@ -110,8 +115,8 @@ class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWo
           DurableProducerQueue.State(
             5,
             3,
-            Map(NoQualifier -> 3),
-            Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier))))
+            Map(NoQualifier -> (3L -> TestTimestamp)),
+            Vector(MessageSent(4, TestConsumer.Job("msg-4"), ack = true, NoQualifier, TestTimestamp))))
       }
 
       testKit.stop(producerController)

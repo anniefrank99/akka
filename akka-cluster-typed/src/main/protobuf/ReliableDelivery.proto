@@ -55,6 +55,7 @@ message State {
 message Confirmed {
   required int64 seqNr = 1;
   required string qualifier = 2;
+  required int64 timestamp = 3;
 }
 
 // DurableProducerQueue
@@ -62,6 +63,12 @@ message MessageSent {
   required int64 seqNr = 1;
   required string qualifier = 2;
   required bool ack = 3;
-  required Payload message = 4;
+  required int64 timestamp = 4;
+  required Payload message = 5;
+}
+
+// DurableProducerQueue
+message Cleanup {
+  repeated string qualifiers = 1;
 }
 

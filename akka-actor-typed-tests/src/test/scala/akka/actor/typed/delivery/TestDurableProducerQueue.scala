@@ -40,6 +40,9 @@ object TestDurableProducerQueue {
     apply(delay, new AtomicReference(state), _ => false)
   }
 
+  // using a fixed timestamp to simplify tests, not using the timestamps in the commands
+  val TestTimestamp: DurableProducerQueue.TimestampMillis = Long.MaxValue
+
 }
 
 class TestDurableProducerQueue[A](
@@ -48,6 +51,7 @@ class TestDurableProducerQueue[A](
     stateHolder: AtomicReference[DurableProducerQueue.State[A]],
     failWhen: DurableProducerQueue.Command[A] => Boolean) {
   import DurableProducerQueue._
+  import TestDurableProducerQueue.TestTimestamp
 
   private def active(state: State[A]): Behavior[Command[A]] = {
     stateHolder.set(state)
@@ -66,7 +70,10 @@ class TestDurableProducerQueue[A](
           maybeFail(cmd)
           val reply = StoreMessageSentAck(cmd.sent.seqNr)
           if (delay == Duration.Zero) cmd.replyTo ! reply else context.scheduleOnce(delay, cmd.replyTo, reply)
-          active(state.copy(currentSeqNr = cmd.sent.seqNr + 1, unconfirmed = state.unconfirmed :+ cmd.sent))
+          active(
+            state.copy(
+              currentSeqNr = cmd.sent.seqNr + 1,
+              unconfirmed = state.unconfirmed :+ cmd.sent.copy(timestampMillis = TestTimestamp)))
         } else if (cmd.sent.seqNr == state.currentSeqNr - 1) {
           // already stored, could be a retry after timout
           context.log.info("Duplicate seqNr [{}], currentSeqNr [{}]", cmd.sent.seqNr, state.currentSeqNr)
@@ -92,7 +99,7 @@ class TestDurableProducerQueue[A](
         active(
           state.copy(
             highestConfirmedSeqNr = newHighestConfirmed,
-            confirmedSeqNr = state.confirmedSeqNr.updated(cmd.confirmationQualifier, cmd.seqNr),
+            confirmedSeqNr = state.confirmedSeqNr.updated(cmd.confirmationQualifier, (cmd.seqNr, TestTimestamp)),
             unconfirmed = newUnconfirmed))
     }
   }

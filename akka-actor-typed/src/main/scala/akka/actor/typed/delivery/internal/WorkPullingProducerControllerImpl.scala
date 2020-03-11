@@ -155,7 +155,7 @@ import akka.util.Timeout
     def becomeActive(p: ActorRef[RequestNext[A]], s: DurableProducerQueue.State[A]): Behavior[InternalCommand] = {
       // resend unconfirmed to self, order doesn't matter for work pulling
       s.unconfirmed.foreach {
-        case DurableProducerQueue.MessageSent(oldSeqNr, msg, _, oldConfirmationQualifier) =>
+        case DurableProducerQueue.MessageSent(oldSeqNr, msg, _, oldConfirmationQualifier, _) =>
           context.self ! ResendDurableMsg(msg, oldConfirmationQualifier, oldSeqNr)
       }
 
@@ -398,7 +398,12 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       selectWorker() match {
         case Some((outKey, out)) =>
           storeMessageSent(
-            MessageSent(s.currentSeqNr, msg, ack = replyTo.isDefined, out.confirmationQualifier),
+            MessageSent(
+              s.currentSeqNr,
+              msg,
+              ack = replyTo.isDefined,
+              out.confirmationQualifier,
+              System.currentTimeMillis()),
             attempt = 1)
           val newReplyAfterStore = replyTo match {
             case None    => s.replyAfterStore
@@ -424,7 +429,9 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       require(durableQueue.isDefined, "Unexpected ResendDurableMsg when DurableQueue not defined.")
       selectWorker() match {
         case Some((outKey, out)) =>
-          storeMessageSent(MessageSent(s.currentSeqNr, resend.msg, false, out.confirmationQualifier), attempt = 1)
+          storeMessageSent(
+            MessageSent(s.currentSeqNr, resend.msg, false, out.confirmationQualifier, System.currentTimeMillis()),
+            attempt = 1)
           // When StoreMessageSentCompleted (oldConfirmationQualifier, oldSeqNr) confirmation will be stored
           active(
             s.copy(
@@ -451,7 +458,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       s.handOver.get(seqNr).foreach {
         case HandOver(oldConfirmationQualifier, oldSeqNr) =>
           durableQueue.foreach { d =>
-            d ! StoreMessageConfirmed(oldSeqNr, oldConfirmationQualifier)
+            d ! StoreMessageConfirmed(oldSeqNr, oldConfirmationQualifier, System.currentTimeMillis())
           }
       }
 
@@ -485,7 +492,10 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
 
         durableQueue.foreach { d =>
           // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-          d ! StoreMessageConfirmed(confirmed.last.totalSeqNr, outState.confirmationQualifier)
+          d ! StoreMessageConfirmed(
+            confirmed.last.totalSeqNr,
+            outState.confirmationQualifier,
+            System.currentTimeMillis())
         }
       }
 
@@ -599,7 +609,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
       case m: ResendDurableMsg[A] =>
         onResendDurableMsg(m)
 
-      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _, _)) =>
+      case StoreMessageSentCompleted(MessageSent(seqNr, m: A, _, _, _)) =>
         receiveStoreMessageSentCompleted(seqNr, m)
 
       case f: StoreMessageSentFailed[A] =>
