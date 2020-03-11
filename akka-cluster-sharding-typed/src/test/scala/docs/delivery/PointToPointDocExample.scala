@@ -6,7 +6,6 @@ package docs.delivery
 
 import java.util.UUID
 
-import scala.annotation.tailrec
 import com.github.ghik.silencer.silent
 
 import akka.actor.typed.ActorSystem
@@ -42,7 +41,7 @@ object PointToPointDocExample {
     private def fibonacci(n: Long, b: BigInt, a: BigInt): Behavior[Command] = {
       Behaviors.receive {
         case (context, WrappedRequestNext(next)) =>
-          context.log.info(s"Generated fibonacci {}: {}", n, a)
+          context.log.info("Generated fibonacci {}: {}", n, a)
           next.sendNextTo ! FibonacciConsumer.FibonacciNumber(n, a)
 
           if (n == 1000)

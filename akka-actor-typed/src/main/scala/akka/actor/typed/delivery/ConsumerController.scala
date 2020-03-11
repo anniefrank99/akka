@@ -89,13 +89,14 @@ object ConsumerController {
    * When the message has been processed the consumer is supposed to send `Confirmed` back
    * to the `ConsumerController` via the `confirmTo` in the [[Delivery]] message.
    */
-  case object Confirmed extends Confirmed {
+  case object Confirmed extends Confirmed
 
-    /**
-     * Java API: the singleton instance of the Confirmed message
-     */
-    def getInstance: Confirmed = Confirmed
-  }
+  /**
+   * Java API: the singleton instance of the Confirmed message.
+   * When the message has been processed the consumer is supposed to send `Confirmed` back
+   * to the `ConsumerController` via the `confirmTo` in the [[Delivery]] message.
+   */
+  def confirmed(): Confirmed = Confirmed
 
   /**
    * Register the `ConsumerController` to the given `producerController`. It will

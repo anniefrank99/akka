@@ -101,10 +101,16 @@ An example of a fibonacci number generator (producer):
 Scala
 :  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #imports #producer }
 
+Java
+:  @@snip [PointToPointDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/PointToPointDocExample.java) { #imports #producer }
+
 and consumer of the fibonacci numbers:
 
 Scala
 :  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #consumer }
+
+Java
+:  @@snip [PointToPointDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/PointToPointDocExample.java) { #consumer }
 
 The `FibonacciProducer` sends the messages to a `ProducerController`. The `FibonacciConsumer` receives the messages
 from a `ConsumerController`. Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map
@@ -118,7 +124,8 @@ messages, or by using the `Receptionist`. Alternatively, they can be connected i
 Scala
 :  @@snip [PointToPointDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/PointToPointDocExample.scala) { #connect }
 
-FIXME Java example
+Java
+:  @@snip [PointToPointDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/PointToPointDocExample.java) { #connect }
 
 ### Point-to-point delivery semantics
 
