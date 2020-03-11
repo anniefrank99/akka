@@ -103,6 +103,12 @@ object ProducerController {
       askNextTo: ActorRef[MessageWithConfirmation[A]])
 
   /**
+   * Java API: The `Class` type for `RequestNext` that can be used when creating a `messageAdapter`
+   * for `Class<RequestNext<MessageType>>`.
+   */
+  def requestNextClass[A](): Class[RequestNext[A]] = classOf[RequestNext[A]]
+
+  /**
    * For sending confirmation message back to the producer when the message has been confirmed.
    * Typically used with `context.ask` from the producer.
    *

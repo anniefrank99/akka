@@ -21,6 +21,7 @@ import akka.actor.typed.delivery.ConsumerController;
 // #consumer
 
 import akka.actor.typed.ActorSystem;
+
 import java.util.UUID;
 
 interface PointToPointDocExample {
@@ -50,7 +51,7 @@ interface PointToPointDocExample {
           context -> {
             ActorRef<ProducerController.RequestNext<FibonacciConsumer.Command>> requestNextAdapter =
                 context.messageAdapter(
-                    ProducerController.RequestNext.class, WrappedRequestNext::new);
+                    ProducerController.requestNextClass(), WrappedRequestNext::new);
             producerController.tell(new ProducerController.Start<>(requestNextAdapter));
 
             return new FibonacciProducer(context).fibonacci(0, BigInteger.ONE, BigInteger.ZERO);
@@ -101,7 +102,7 @@ interface PointToPointDocExample {
       return Behaviors.setup(
           context -> {
             ActorRef<ConsumerController.Delivery<FibonacciConsumer.Command>> deliveryAdapter =
-                context.messageAdapter(ConsumerController.Delivery.class, WrappedDelivery::new);
+                context.messageAdapter(ConsumerController.deliveryClass(), WrappedDelivery::new);
             consumerController.tell(new ConsumerController.Start<>(deliveryAdapter));
 
             return Behaviors.receive(Command.class)

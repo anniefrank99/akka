@@ -144,6 +144,12 @@ object ShardingProducerController {
     }
   }
 
+  /**
+   * Java API: The `Class` type for `RequestNext` that can be used when creating a `messageAdapter`
+   * for `Class<RequestNext<MessageType>>`.
+   */
+  def requestNextClass[A](): Class[RequestNext[A]] = classOf[RequestNext[A]]
+
   object Settings {
 
     /**

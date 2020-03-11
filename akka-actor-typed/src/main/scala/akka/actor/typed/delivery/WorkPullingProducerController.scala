@@ -111,6 +111,12 @@ object WorkPullingProducerController {
   final case class RequestNext[A](sendNextTo: ActorRef[A], askNextTo: ActorRef[MessageWithConfirmation[A]])
 
   /**
+   * Java API: The `Class` type for `RequestNext` that can be used when creating a `messageAdapter`
+   * for `Class<RequestNext<MessageType>>`.
+   */
+  def requestNextClass[A](): Class[RequestNext[A]] = classOf[RequestNext[A]]
+
+  /**
    * For sending confirmation message back to the producer when the message has been fully delivered, processed,
    * and confirmed by the consumer. Typically used with `context.ask` from the producer.
    */
