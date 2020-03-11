@@ -419,13 +419,16 @@ class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecL
 
       val consumerProbe = createTestProbe[ConsumerController.Delivery[TestConsumer.Job]]()
 
-      // not first, will be ignored
+      // while waiting for Start the SequencedMessage will be stashed
       consumerController ! sequencedMessage(producerId, 44, producerControllerProbe.ref)
       consumerController ! sequencedMessage(producerId, 41, producerControllerProbe.ref).asFirst
-      // still waiting for Start, so 45 is stashed
       consumerController ! sequencedMessage(producerId, 45, producerControllerProbe.ref)
 
       consumerController ! ConsumerController.Start(consumerProbe.ref)
+      // unstashed 44, 41, 45
+      // 44 is not first so will trigger a full Resend
+      producerControllerProbe.expectMessage(ProducerControllerImpl.Resend(0))
+      // and 41 is first, which will trigger the initial Request
       producerControllerProbe.expectMessage(ProducerControllerImpl.Request(0, 60, true, false))
 
       consumerProbe.expectMessageType[ConsumerController.Delivery[TestConsumer.Job]].seqNr should ===(41)
