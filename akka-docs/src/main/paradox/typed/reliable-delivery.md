@@ -222,6 +222,8 @@ Java
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
+See also the corresponding @ref:[example that is using ask from the producer](#ask-from-the-producer).
+
 ### Work pulling delivery semantics
 
 For work pulling the order of the messages should not matter, because each message is routed randomly
@@ -304,21 +306,25 @@ Example of `TodoList` entity (consumer):
 Scala
 :  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #imports #consumer }
 
+Java
+:  @@snip [ShardingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/ShardingDocExample.java) { #imports #consumer }
+
 and `TodoService` (producer):
 
 Scala
 :  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #producer }
+
+Java
+:  @@snip [ShardingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/ShardingDocExample.java) { #producer }
 
 Note how the `ActorRef` in the `Start` messages are constructed as message adapters to map the
 `RequestNext` and `Delivery` to the protocol of the producer and consumer actors respectively.
 
 Those are initialized with sharding like this (from the guardian):
 
-Scala
-:  @@snip [ShardingDocExample.scala](/akka-cluster-sharding-typed/src/test/scala/docs/delivery/ShardingDocExample.scala) { #init }
+Java
+:  @@snip [ShardingDocExample.java](/akka-cluster-sharding-typed/src/test/java/jdocs/delivery/ShardingDocExample.java) { #init }
 
-FIXME Java example
- 
 ### Sharding delivery semantics
 
 As long as neither producer nor consumer crash the messages are delivered to the consumer actor in the same order

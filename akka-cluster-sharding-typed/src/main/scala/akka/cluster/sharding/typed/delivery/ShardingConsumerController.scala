@@ -128,4 +128,12 @@ object ShardingConsumerController {
       settings: Settings): Behavior[ConsumerController.SequencedMessage[A]] =
     withSettings(settings)(consumerBehavior.apply)
 
+  /**
+   * Java API: The generic `Class` type for `ConsumerController.SequencedMessage` that can be used when creating
+   * an `EntityTypeKey` for the `ShardedConsumerController` with
+   * `Class<EntityTypeKey<ConsumerController.SequencedMessage<MessageType>>>`.
+   */
+  def entityTypeKeyClass[A]: Class[ConsumerController.SequencedMessage[A]] =
+    classOf[ConsumerController.SequencedMessage[A]]
+
 }

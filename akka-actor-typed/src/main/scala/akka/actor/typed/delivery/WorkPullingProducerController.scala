@@ -86,6 +86,10 @@ import com.typesafe.config.Config
  * don't have to be kept in memory in the `ProducerController` until they have been
  * confirmed, but the drawback is that lost messages will not be delivered. See configuration
  * `only-flow-control` of the `ConsumerController`.
+ *
+ * The `producerId` is used in logging and included as MDC entry with key `"producerId"`. It's propagated
+ * to the `ConsumerController` and is useful for correlating log messages. It can be any `String` but it's
+ * recommended to use a unique identifier of representing the producer.
  */
 @ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
 object WorkPullingProducerController {
@@ -111,8 +115,8 @@ object WorkPullingProducerController {
   final case class RequestNext[A](sendNextTo: ActorRef[A], askNextTo: ActorRef[MessageWithConfirmation[A]])
 
   /**
-   * Java API: The `Class` type for `RequestNext` that can be used when creating a `messageAdapter`
-   * for `Class<RequestNext<MessageType>>`.
+   * Java API: The generic `Class` type for `WorkPullingProducerController.RequestNext` that can be used when
+   * creating a `messageAdapter` for `Class<RequestNext<MessageType>>`.
    */
   def requestNextClass[A](): Class[RequestNext[A]] = classOf[RequestNext[A]]
 

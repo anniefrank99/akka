@@ -48,9 +48,9 @@ object ShardingDocExample {
     def apply(
         id: String,
         db: DB,
-        shardingConsumerController: ActorRef[ConsumerController.Start[Command]]): Behavior[Command] = {
+        consumerController: ActorRef[ConsumerController.Start[Command]]): Behavior[Command] = {
       Behaviors.setup[Command] { context =>
-        new TodoList(context, id, db).start(shardingConsumerController)
+        new TodoList(context, id, db).start(consumerController)
       }
     }
 
@@ -59,7 +59,7 @@ object ShardingDocExample {
   class TodoList(context: ActorContext[TodoList.Command], id: String, db: DB) {
     import TodoList._
 
-    private def start(shardingConsumerController: ActorRef[ConsumerController.Start[Command]]): Behavior[Command] = {
+    private def start(consumerController: ActorRef[ConsumerController.Start[Command]]): Behavior[Command] = {
       context.pipeToSelf(db.load(id)) {
         case Success(value) => InitialState(value)
         case Failure(cause) => DBError(cause)
@@ -70,7 +70,7 @@ object ShardingDocExample {
           val deliveryAdapter: ActorRef[ConsumerController.Delivery[Command]] = context.messageAdapter { delivery =>
             CommandDelivery(delivery.message, delivery.confirmTo)
           }
-          shardingConsumerController ! ConsumerController.Start(deliveryAdapter)
+          consumerController ! ConsumerController.Start(deliveryAdapter)
           active(state)
         case DBError(cause) =>
           throw cause
@@ -116,16 +116,16 @@ object ShardingDocExample {
     sealed trait Response
     case object Accepted extends Response
     case object Rejected extends Response
+    case object MaybeAccepted extends Response
 
     private final case class WrappedRequestNext(requestNext: ShardingProducerController.RequestNext[TodoList.Command])
         extends Command
     private final case class Confirmed(originalReplyTo: ActorRef[Response]) extends Command
     private final case class TimedOut(originalReplyTo: ActorRef[Response]) extends Command
 
-    def apply(shardingProducerController: ActorRef[ShardingProducerController.Command[TodoList.Command]])
-        : Behavior[Command] = {
+    def apply(producerController: ActorRef[ShardingProducerController.Command[TodoList.Command]]): Behavior[Command] = {
       Behaviors.setup { context =>
-        new TodoService(context).start(shardingProducerController)
+        new TodoService(context).start(producerController)
       }
     }
 
@@ -137,10 +137,10 @@ object ShardingDocExample {
     private implicit val askTimeout: Timeout = 5.seconds
 
     private def start(
-        shardingProducerController: ActorRef[ShardingProducerController.Start[TodoList.Command]]): Behavior[Command] = {
+        producerController: ActorRef[ShardingProducerController.Start[TodoList.Command]]): Behavior[Command] = {
       val requestNextAdapter: ActorRef[ShardingProducerController.RequestNext[TodoList.Command]] =
         context.messageAdapter(WrappedRequestNext.apply)
-      shardingProducerController ! ShardingProducerController.Start(requestNextAdapter)
+      producerController ! ShardingProducerController.Start(requestNextAdapter)
 
       Behaviors.receiveMessagePartial {
         case WrappedRequestNext(next) =>
@@ -176,7 +176,7 @@ object ShardingDocExample {
           Behaviors.same
 
         case TimedOut(originalReplyTo) =>
-          originalReplyTo ! Rejected
+          originalReplyTo ! MaybeAccepted
           Behaviors.same
       }
     }
@@ -204,10 +204,10 @@ object ShardingDocExample {
       val selfAddress = Cluster(system).selfMember.address
       val producerId = s"todo-producer-${selfAddress.host}:${selfAddress.port}"
 
-      val shardingProducerController =
+      val producerController =
         context.spawn(ShardingProducerController(producerId, region, durableQueueBehavior = None), "producerController")
 
-      context.spawn(TodoService(shardingProducerController), "producer")
+      context.spawn(TodoService(producerController), "producer")
       //#init
 
       Behaviors.empty
