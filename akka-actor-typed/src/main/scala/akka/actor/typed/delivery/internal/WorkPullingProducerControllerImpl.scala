@@ -539,7 +539,7 @@ private class WorkPullingProducerControllerImpl[A: ClassTag](
     }
 
     def receiveCurrentWorkers(curr: CurrentWorkers[A]): Behavior[InternalCommand] = {
-      // TODO we could also track unreachable workers and avoid them when selecting worker
+      // TODO #28722 we could also track unreachable workers and avoid them when selecting worker
       val addedWorkers = curr.workers.diff(s.workers)
       val removedWorkers = s.workers.diff(curr.workers)
 

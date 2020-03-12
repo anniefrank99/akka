@@ -44,7 +44,7 @@ import com.typesafe.config.Config
  * The `ConsumerController` is automatically stopped when the consumer that registered with the `Start`
  * message is terminated.
  */
-@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
+@ApiMayChange // TODO #28719 when removing ApiMayChange consider removing `case class` for some of the messages
 object ConsumerController {
   import ConsumerControllerImpl.UnsealedInternalCommand
 

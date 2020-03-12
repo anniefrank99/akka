@@ -19,7 +19,7 @@ import akka.actor.typed.delivery.internal.DeliverySerializable
  *
  * An implementation of this exists in `akka.persistence.typed.delivery.EventSourcedProducerQueue`.
  */
-@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
+@ApiMayChange // TODO #28719 when removing ApiMayChange consider removing `case class` for some of the messages
 object DurableProducerQueue {
 
   type SeqNr = Long

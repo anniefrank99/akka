@@ -85,7 +85,7 @@ import com.typesafe.config.Config
  * to the `ConsumerController` and is useful for correlating log messages. It can be any `String` but it's
  * recommended to use a unique identifier of representing the producer.
  */
-@ApiMayChange // TODO when removing ApiMayChange consider removing `case class` for some of the messages
+@ApiMayChange // TODO #28719 when removing ApiMayChange consider removing `case class` for some of the messages
 object ShardingProducerController {
 
   import ShardingProducerControllerImpl.UnsealedInternalCommand

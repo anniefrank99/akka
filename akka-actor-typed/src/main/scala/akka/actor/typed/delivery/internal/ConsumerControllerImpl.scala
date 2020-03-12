@@ -447,7 +447,7 @@ private class ConsumerControllerImpl[A](
               s.producerController ! Ack(seqNr)
             }
           } else {
-            // FIXME can we use unstashOne instead of all?
+            // FIXME #28718 can we use unstashOne instead of all?
             stashBuffer.unstashAll(active(s.copy(confirmedSeqNr = seqNr, requestedSeqNr = newRequestedSeqNr)))
           }
 
@@ -563,7 +563,7 @@ private class ConsumerControllerImpl[A](
     if (s.producerController == context.system.deadLetters) {
       s
     } else {
-      // TODO Maybe try to adjust the retry frequency. Maybe some exponential backoff and less need for it when
+      // TODO #28720 Maybe try to adjust the retry frequency. Maybe some exponential backoff and less need for it when
       //      SequenceMessage are arriving. On the other hand it might be too much overhead to reschedule of each
       //      incoming SequenceMessage.
       val newRequestedSeqNr = if (resendLost) s.requestedSeqNr else s.receivedSeqNr + flowControlWindow / 2
@@ -571,7 +571,7 @@ private class ConsumerControllerImpl[A](
         "Retry sending Request with confirmedSeqNr [{}], requestUpToSeqNr [{}].",
         s.confirmedSeqNr,
         newRequestedSeqNr)
-      // TODO maybe watch the producer to avoid sending retry Request to dead producer
+      // TODO #28720 maybe watch the producer to avoid sending retry Request to dead producer
       s.producerController ! Request(s.confirmedSeqNr, newRequestedSeqNr, resendLost, viaTimeout = true)
       s.copy(requestedSeqNr = newRequestedSeqNr)
     }

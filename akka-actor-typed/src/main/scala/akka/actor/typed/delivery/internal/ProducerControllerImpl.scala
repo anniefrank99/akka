@@ -463,7 +463,7 @@ private class ProducerControllerImpl[A: ClassTag](
 
       durableQueue.foreach { d =>
         // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-        // TODO to reduce number of writes, consider to only StoreMessageConfirmed for the Request messages and not for each Ack
+        // TODO #28721 to reduce number of writes, consider to only StoreMessageConfirmed for the Request messages and not for each Ack
         if (newMaxConfirmedSeqNr != s.confirmedSeqNr)
           d ! StoreMessageConfirmed(newMaxConfirmedSeqNr, NoQualifier, System.currentTimeMillis())
       }
