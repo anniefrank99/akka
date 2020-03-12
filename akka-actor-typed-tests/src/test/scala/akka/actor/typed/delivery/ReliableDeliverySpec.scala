@@ -10,7 +10,12 @@ import akka.actor.testkit.typed.scaladsl.LogCapturing
 import akka.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class ReliableDeliverySpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class ReliableDeliverySpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import TestConsumer.defaultConsumerDelay
   import TestProducer.defaultProducerDelay
 

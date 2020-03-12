@@ -11,7 +11,12 @@ import akka.actor.typed.delivery.internal.ConsumerControllerImpl
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class ConsumerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class ConsumerControllerSpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import TestConsumer.sequencedMessage
 
   private var idCount = 0

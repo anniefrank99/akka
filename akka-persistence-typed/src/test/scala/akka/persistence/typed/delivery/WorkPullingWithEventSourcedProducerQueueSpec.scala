@@ -25,6 +25,7 @@ object WorkPullingWithEventSourcedProducerQueueSpec {
     akka.persistence.snapshot-store.local.dir = "target/WorkPullingWithEventSourcedProducerQueueSpec-${UUID
       .randomUUID()
       .toString}"
+    akka.reliable-delivery.consumer-controller.flow-control-window = 20  
     """)
 }
 

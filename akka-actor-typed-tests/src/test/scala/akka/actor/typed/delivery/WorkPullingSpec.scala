@@ -15,7 +15,12 @@ import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class WorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class WorkPullingSpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import TestConsumer.defaultConsumerDelay
   import TestProducer.defaultProducerDelay
 

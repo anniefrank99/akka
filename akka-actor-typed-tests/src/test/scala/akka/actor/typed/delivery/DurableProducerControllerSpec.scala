@@ -15,7 +15,12 @@ import ProducerController.MessageWithConfirmation
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class DurableProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class DurableProducerControllerSpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import TestConsumer.sequencedMessage
   import DurableProducerQueue.NoQualifier
   import TestDurableProducerQueue.TestTimestamp

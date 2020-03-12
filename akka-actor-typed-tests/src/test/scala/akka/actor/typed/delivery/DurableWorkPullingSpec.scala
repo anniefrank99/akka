@@ -18,7 +18,12 @@ import akka.actor.typed.receptionist.Receptionist
 import akka.actor.typed.receptionist.ServiceKey
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class DurableWorkPullingSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class DurableWorkPullingSpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import DurableProducerQueue.NoQualifier
   import TestDurableProducerQueue.TestTimestamp
 

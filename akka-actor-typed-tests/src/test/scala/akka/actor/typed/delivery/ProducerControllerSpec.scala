@@ -12,7 +12,12 @@ import ProducerController.MessageWithConfirmation
 import akka.actor.typed.delivery.internal.ProducerControllerImpl
 import org.scalatest.wordspec.AnyWordSpecLike
 
-class ProducerControllerSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with LogCapturing {
+class ProducerControllerSpec
+    extends ScalaTestWithActorTestKit("""
+  akka.reliable-delivery.consumer-controller.flow-control-window = 20
+  """)
+    with AnyWordSpecLike
+    with LogCapturing {
   import TestConsumer.sequencedMessage
 
   private var idCount = 0

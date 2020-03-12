@@ -39,6 +39,7 @@ object DurableShardingSpec {
     akka.persistence.journal.plugin = "akka.persistence.journal.inmem"
     akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
     akka.persistence.snapshot-store.local.dir = "target/DurableShardingSpec-${UUID.randomUUID().toString}"
+    akka.reliable-delivery.consumer-controller.flow-control-window = 20
     """)
 }
 
